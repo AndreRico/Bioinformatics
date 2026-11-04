@@ -1,0 +1,181 @@
+# File formats {#sec-formats}
+
+Genetic data passes through a small set of formats, each built for one stage: FASTQ for reads, BAM or CRAM for alignments, VCF for variants, PLINK and BGEN for analysis-ready genotypes, and plain tables for summary statistics. Learn what each column means and which genome build the coordinates use. Most silent errors in a pipeline come from a format misread, not from a bad model.
+
+## The map
+
+Each format answers a different question, and files shrink by orders of magnitude as you move down the pipeline.
+
+```{mermaid}
+flowchart TD
+    F["FASTQ<br/>raw reads"] --> B["BAM or CRAM<br/>aligned reads"]
+    B --> G["gVCF<br/>one sample, all sites"]
+    G --> P["pVCF<br/>many samples, variant sites"]
+    P --> K["PLINK or BGEN<br/>analysis-ready genotypes"]
+    K --> S["Summary statistics<br/>one row per variant"]
+```
+
+| Format | Holds | Typical size per 30× genome | Read with |
+| --- | --- | --- | --- |
+| FASTQ (gzipped) | Reads and base qualities | Tens of GB | `seqkit`, FastQC |
+| BAM | Aligned reads | Roughly 50–100 GB | `samtools` |
+| CRAM | Aligned reads, reference-compressed | Roughly 15–35 GB | `samtools` (needs the reference) |
+| gVCF | One sample's variants plus reference blocks | A few GB | `bcftools`, GATK |
+| pVCF | Joint-called genotypes for a cohort | Grows with samples × sites; TB for large cohorts | `bcftools`, Hail |
+| PLINK / BGEN | Genotype matrices for analysis | Small per sample | PLINK, REGENIE, SAIGE |
+
+## FASTQ: reads
+
+A FASTQ file stores four lines per read: an identifier starting with `@`, the bases, a `+` separator, and one quality character per base.
+
+```text
+@SRR000001.1 read1/1
+GATTTGGGGTTCAAAGCAGTATCGATCAAATAGT
++
+!''*((((***+))%%%++)(%%%%).1***-+*
+```
+
+Each quality character encodes a **Phred score** $Q = -10 \log_{10} p$, where $p$ is the probability the base is wrong. Q20 means a 1% error rate and Q30 means 0.1%. Modern files use Phred+33 encoding: the score is the ASCII code minus 33.
+
+## BAM and CRAM: aligned reads
+
+**SAM** is the text format for reads placed on a reference; **BAM** is its compressed binary form. Each record holds the read, its position, mapping quality, and a **CIGAR** string describing matches, insertions, and deletions. Sorted and indexed (`.bai`), a BAM lets you jump straight to any region.
+
+**CRAM** stores only how each read differs from the reference, so it is two to three times smaller than BAM and lossless. The catch: you need the exact reference FASTA used for alignment to decode it.
+
+```bash
+samtools view -H sample.cram | grep '^@SQ' | head -3   # which reference contigs?
+samtools idxstats sample.bam | head                    # reads per chromosome
+samtools depth -r chr1:1000000-1001000 sample.bam      # per-base depth
+```
+
+## VCF: variants
+
+The Variant Call Format (Danecek et al., 2011, *Bioinformatics*; specification at <https://samtools.github.io/hts-specs/>) is the common language for variants. A VCF has a header of `##` meta lines, one `#CHROM` column line, and one row per variant site.
+
+```text
+##fileformat=VCFv4.2
+##contig=<ID=chr1,length=248956422>
+##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+##FORMAT=<ID=DS,Number=A,Type=Float,Description="Alt allele dosage">
+#CHROM  POS     ID         REF  ALT  QUAL  FILTER  INFO     FORMAT  S1          S2
+chr1    1000156 rs1234567  G    A    .     PASS    AF=0.21  GT:DS   0|1:1.00    0|0:0.02
+chr1    1002345 .          CT   C,CTT 812  PASS    AF=0.05,0.01 GT:DS 1/2:.,.  0/0:0,0
+```
+
+The eight fixed columns:
+
+| Column | Meaning |
+| --- | --- |
+| `CHROM`, `POS` | Chromosome and 1-based position of the first REF base |
+| `ID` | Identifier, usually an rsID, or `.` |
+| `REF`, `ALT` | Reference allele and comma-separated alternate alleles |
+| `QUAL` | Phred-scaled confidence that a variant exists |
+| `FILTER` | `PASS`, or the names of the filters that failed |
+| `INFO` | Site-level annotations as `KEY=value` pairs, defined in the header |
+| `FORMAT` | The order of per-sample fields in each sample column |
+
+The per-sample fields you will use most:
+
+- **GT**, the genotype. `0` is REF, `1` the first ALT, `2` the second. `/` means **unphased**: you know the two alleles, not which chromosome carries which. `|` means **phased**: `0|1` and `1|0` are different haplotypes. `./.` is missing.
+- **DS**, the dosage: the expected number of ALT alleles, from 0 to 2. Imputed data carries this.
+- **GP**, genotype probabilities for 0/0, 0/1, and 1/1. They sum to 1, and $DS = P(0/1) + 2 \times P(1/1)$.
+- **AD** and **DP**, allelic depths and total depth, from sequencing callers. **GQ** is the genotype quality.
+
+Phasing matters when two variants in the same gene must be assigned to haplotypes, as in pharmacogenomics star alleles (@sec-pgx). Unphased sequencing calls cannot tell **cis** (same chromosome) from **trans** (different chromosomes). Statistical phasing, read-backed phasing, long reads, or family data can.
+
+A **multiallelic** site has more than one ALT, like the second row above. Many tools expect one ALT per row, so split them first and normalize indels against the reference:
+
+```bash
+bcftools norm -m -any -f GRCh38.fa in.vcf.gz -Oz -o split.vcf.gz
+bcftools index -t split.vcf.gz
+bcftools view -r chr1:1000000-2000000 -i 'FILTER="PASS"' split.vcf.gz | head
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%INFO/AF\n' split.vcf.gz | head
+```
+
+Large VCFs are compressed with **bgzip** (block gzip, `.vcf.gz`) and indexed with **tabix** (`.tbi`) or CSI (`.csi`), which allows random access by region.
+
+::: {.callout-warning title="Pitfall"}
+VCF positions are 1-based, BED files are 0-based and half-open. A BED interval `chr1 99 100` is the single VCF position `chr1:100`. Off-by-one errors here silently drop or shift variants.
+:::
+
+## gVCF and pVCF: per sample and per cohort
+
+Sequencing pipelines produce two kinds of VCF.
+
+- A **gVCF** (genomic VCF) covers one sample and every position. Variant sites are listed as usual; stretches of confident reference are compressed into **reference blocks** with a minimum depth and quality. GATK HaplotypeCaller in `-ERC GVCF` mode and DeepVariant produce them.
+- A **pVCF** (project or population VCF) is a multi-sample matrix: one row per variant site, one column per sample. It comes from **joint genotyping** many gVCFs, with GATK GenotypeGVCFs or GLnexus.
+
+Joint calling exists because a plain VCF cannot distinguish "this person is homozygous reference here" from "this person had no reads here". The gVCF records which is true, so when a variant appears in any sample, every other sample gets a real genotype or a real missing call. It also borrows strength across samples to call low-depth variants. New samples can be added by re-running joint genotyping on the gVCFs, without re-aligning.
+
+## PLINK formats: analysis-ready genotypes
+
+PLINK (Chang et al., 2015, *GigaScience*; <https://www.cog-genomics.org/plink/2.0/>) defines the formats most GWAS tools read.
+
+| | PLINK 1 | PLINK 2 |
+| --- | --- | --- |
+| Genotypes | `.bed` (binary, hard calls 0/1/2/missing) | `.pgen` (compressed; also dosages and phase) |
+| Variants | `.bim`: chr, ID, cM, pos, A1, A2 | `.pvar`: VCF-like, `#CHROM POS ID REF ALT` |
+| Samples | `.fam`: FID, IID, father, mother, sex, phenotype | `.psam`: `#FID IID SEX` plus any columns |
+| Multiallelic | No (split first) | Yes |
+
+The PLINK 1 `.bed` is unrelated to the UCSC BED interval format. It stores two bits per genotype, so 500,000 people at one million variants fit in about 125 GB.
+
+```bash
+# VCF to PLINK 2, keeping dosages
+plink2 --vcf imputed.vcf.gz dosage=DS --make-pgen --out cohort
+# PLINK 2 back to PLINK 1 for older tools (hard calls only)
+plink2 --pfile cohort --make-bed --out cohort_b
+# Allele frequencies and missingness
+plink2 --pfile cohort --freq --missing --out cohort_stats
+```
+
+::: {.callout-warning title="Pitfall"}
+In PLINK 1, A1 is the minor allele by default, not the ALT allele. Converting a VCF to `.bed` and back can swap REF and ALT. Use `--keep-allele-order` in PLINK 1.9, or check effect alleles explicitly before you merge or meta-analyze (@sec-meta).
+:::
+
+## BGEN: imputed dosages at scale
+
+**BGEN** (<https://www.well.ox.ac.uk/~gav/bgen_format/>) stores genotype probabilities compactly, with a `.bgi` index and usually a `.sample` file for sample IDs. It is the distribution format for UK Biobank imputed data and is read natively by REGENIE, SAIGE, and PLINK 2. Version 1.2 with 8-bit probabilities is the common choice.
+
+```bash
+plink2 --bgen ukb_chr22.bgen ref-first --sample ukb.sample --make-pgen --out chr22
+```
+
+## Summary statistics
+
+A GWAS ends in a table with one row per variant. There is no single standard, but a usable file has these columns: chromosome, position, genome build, effect allele, other allele, effect allele frequency, beta (or odds ratio), standard error, p-value, and sample size. The **GWAS-SSF** format of the GWAS Catalog (Hayhurst et al., 2022, *bioRxiv* preprint) standardizes the names.
+
+```text
+chromosome  base_pair_location  effect_allele  other_allele  beta     standard_error  effect_allele_frequency  p_value  n
+1           1000156             A              G             0.031    0.006           0.21                     2.1e-7   48210
+```
+
+Without the effect allele and the build, a summary statistics file cannot be used safely. Ask for both.
+
+## Genome builds and liftover
+
+The human reference has two builds in common use. **GRCh37** (hg19) dates from 2009 and still underlies much older data. **GRCh38** (hg38) from 2013 fixes errors and gaps and is the default for new sequencing. The same variant has different positions in each: an rsID is stable, a position is not.
+
+```{mermaid}
+flowchart LR
+    A["Data on GRCh37"] --> L["Liftover<br/>chain file"]
+    L --> B["Data on GRCh38"]
+    L --> U["Unmapped sites<br/>review or drop"]
+```
+
+**Liftover** converts coordinates with a chain file. Tools include UCSC liftOver and CrossMap for intervals, and `bcftools +liftover` (a plugin installed separately) or Picard LiftoverVcf for VCFs, which also handle strand and allele swaps. Some sites fail to map or land on a different chromosome; drop them and record how many.
+
+| Signal | GRCh37 | GRCh38 |
+| --- | --- | --- |
+| Chromosome names | Often `1`, `2`, ... | Often `chr1`, `chr2`, ... |
+| chr1 length in header | 249,250,621 | 248,956,422 |
+
+::: {.callout-tip title="In practice"}
+Never infer the build from the chromosome prefix alone. Check the `##contig` lengths or `##reference` line in the VCF header, or look up a few well-known rsIDs in dbSNP and compare positions.
+:::
+
+::: {.callout-note title="Try it"}
+Download the 1000 Genomes Phase 3 VCF for chromosome 22 from the IGSR FTP site (<https://www.internationalgenome.org/data>). With `bcftools`, count the multiallelic sites, split them with `bcftools norm -m -any`, and convert the result to PLINK 2 with `plink2 --vcf ... --make-pgen`. Check the contig length in the header and decide which genome build it uses.
+:::

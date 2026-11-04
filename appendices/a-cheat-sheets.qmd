@@ -1,0 +1,120 @@
+# Cheat sheets {#sec-cheatsheets}
+
+These pages collect the commands, thresholds, and formulas you'll reach for most. Each table points back to the chapter that explains it.
+
+## The GWAS pipeline at a glance
+
+```{mermaid}
+flowchart LR
+    G["Genotypes<br/>bed/bim/fam or pgen"] --> QC["QC<br/>missingness, HWE, MAF,<br/>heterozygosity, sex"]
+    QC --> S["Structure<br/>LD pruning, kinship, PCA"]
+    S --> N["SAIGE step 1<br/>null model + GRM"]
+    N --> T["SAIGE step 2<br/>per-variant tests"]
+    T --> P["Plots<br/>Manhattan, QQ, lambda"]
+    P --> I["Interpretation<br/>clumping, annotation, eQTL"]
+```
+
+Chapters: @sec-qc, @sec-structure, @sec-gwas, @sec-saige, @sec-postgwas.
+
+## Common QC thresholds
+
+These are typical starting points, not laws. Record the values you used in your analysis plan (@sec-templates).
+
+| Check | Typical threshold | PLINK flag | Chapter |
+| --- | --- | --- | --- |
+| Variant missingness | exclude if > 2% (strict) to 5% | `--geno 0.02` | @sec-qc |
+| Sample missingness | exclude if > 2% to 5% | `--mind 0.02` | @sec-qc |
+| Minor allele frequency | keep MAF ≥ 1% for common-variant GWAS | `--maf 0.01` | @sec-qc |
+| Hardy–Weinberg | exclude if p < 1×10⁻⁶ (controls) | `--hwe 1e-6` | @sec-qc |
+| Heterozygosity | exclude samples beyond ±3 SD of the mean | `--het` | @sec-qc |
+| Sex check | F < 0.2 female, F > 0.8 male | `--check-sex` | @sec-qc |
+| Relatedness | KING kinship > 0.0884 (second degree or closer) | `--king-cutoff 0.0884` | @sec-structure |
+| Imputation quality | INFO / R² ≥ 0.3 to 0.8, depending on use | `--extract` on filtered list | @sec-qc |
+
+## PLINK essentials
+
+```bash
+# Missingness and frequency reports
+plink2 --bfile data --missing --freq --out qc/report
+
+# Basic filters in one pass
+plink2 --bfile data --geno 0.02 --mind 0.02 --maf 0.01 --hwe 1e-6 \
+       --make-pgen --out qc/data_qc
+
+# LD pruning, then PCA on the pruned set
+plink2 --pfile qc/data_qc --indep-pairwise 200 50 0.2 --out qc/prune
+plink2 --pfile qc/data_qc --extract qc/prune.prune.in --pca 10 --out qc/pca
+
+# Remove second-degree relatives or closer
+plink2 --pfile qc/data_qc --king-cutoff 0.0884 --out qc/unrelated
+
+# Association with covariates (logistic for binary, linear for quantitative)
+plink2 --pfile qc/data_qc --pheno pheno.txt --covar covar.txt \
+       --covar-variance-standardize --glm hide-covar firth-fallback \
+       --out results/gwas
+```
+
+## SAIGE essentials
+
+| Step | Script | Key inputs | Key outputs |
+| --- | --- | --- | --- |
+| 1 — null model | `step1_fitNULLGLMM.R` | PLINK file for GRM, phenotype file, covariates, `--traitType` | `.rda` model, `.varianceRatio.txt` |
+| 2 — association | `step2_SPAtests.R` | Dosages (BGEN/VCF/PLINK), step 1 model and variance ratio | Per-variant results: `BETA`, `SE`, `p.value`, `AF_Allele2` |
+
+Details in @sec-saige.
+
+## Reading effect sizes
+
+| Quantity | Formula | Read it as |
+| --- | --- | --- |
+| Odds ratio | $OR = e^{\hat\beta}$ | Change in odds per copy of the effect allele |
+| 95% CI | $e^{\hat\beta \pm 1.96 \cdot SE}$ | Range of plausible ORs |
+| Z-score | $Z = \hat\beta / SE$ | Strength of evidence, signed |
+| Two-sided p | $p = 2\,(1 - \Phi(\lvert Z \rvert))$ | Probability of a result this extreme under $H_0$ |
+| Genomic inflation | $\lambda = \text{median}(\chi^2) / 0.4549$ | ≈ 1.0 is well controlled; polygenic traits in large samples run higher |
+
+| β̂ | SE | p | OR | Conclusion |
+| --- | --- | --- | --- | --- |
+| 0.25 | 0.05 | 6×10⁻⁷ | 1.28 | Moderate effect, strong evidence |
+| 0.25 | 0.25 | 0.32 | 1.28 | Same estimate, too uncertain to conclude |
+| −0.35 | 0.07 | 6×10⁻⁷ | 0.70 | Protective allele |
+
+## Significance thresholds
+
+| Threshold | Use |
+| --- | --- |
+| p < 5×10⁻⁸ | Genome-wide significance for common variants |
+| p < 1×10⁻⁵ | "Suggestive", for follow-up only |
+| 0.05 / number of genes (≈ 2.5×10⁻⁶) | Gene-based tests across ~20,000 genes |
+| FDR q < 0.05 | Exploratory screens, PheWAS |
+
+## HPC job scheduling: LSF and SLURM
+
+| Task | LSF | SLURM |
+| --- | --- | --- |
+| Submit a script | `bsub < job.sh` | `sbatch job.sh` |
+| Interactive session | `bsub -Is bash` | `srun --pty bash` |
+| Request memory | `-M 16000 -R "rusage[mem=16000]"` | `--mem=16G` |
+| Request cores | `-n 4` | `--cpus-per-task=4` |
+| Name and logs | `-J name -o out.%J -e err.%J` | `--job-name=name -o out.%j -e err.%j` |
+| Array job | `-J "chr[1-22]"`, index in `$LSB_JOBINDEX` | `--array=1-22`, index in `$SLURM_ARRAY_TASK_ID` |
+| List my jobs | `bjobs` | `squeue -u $USER` |
+| Job details | `bjobs -l <id>` | `scontrol show job <id>` |
+| Cancel | `bkill <id>` | `scancel <id>` |
+| Queues | `bqueues` | `sinfo` |
+| Finished-job history | `bhist -l <id>` | `sacct -j <id>` |
+
+Details in @sec-computing.
+
+## Code comment tags
+
+A small convention that keeps analysis scripts searchable:
+
+```text
+# TODO:  work still to do
+# FIXME: known to be wrong; fix before using results
+# NOTE:  why something is done this way
+# XXX:   warning; read before changing
+```
+
+`grep -rn "FIXME" scripts/` before every release of results.

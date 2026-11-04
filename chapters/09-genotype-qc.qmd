@@ -1,0 +1,188 @@
+# Genotype quality control {#sec-qc}
+
+Quality control decides whether your GWAS finds biology or artifacts. Remove bad samples first, then bad variants, in a fixed order, and write down every threshold. A clean dataset is one where every remaining sample and variant passed a check you can name.
+
+## The order matters
+
+Run sample checks before variant checks, and run each filter on data that already passed the earlier ones. A sample with 20% missing genotypes makes good variants look bad; a batch of failed variants makes good samples look bad. The usual compromise, used by Anderson et al. (2010, *Nature Protocols*) and Marees et al. (2018, *International Journal of Methods in Psychiatric Research*), is to start with lenient filters, then tighten them.
+
+```{mermaid}
+flowchart TB
+    A["Raw genotypes<br/>VCF or PLINK"] --> B["Import, split X PAR,<br/>add sex"]
+    B --> C["Lenient missingness<br/>variants then samples, 20%"]
+    C --> D["Strict missingness<br/>variants then samples, 2%"]
+    D --> E["Sex check"]
+    E --> F["Heterozygosity outliers"]
+    F --> G["Duplicates and relatives"]
+    G --> H["Ancestry and PCA"]
+    H --> I["Variant filters<br/>MAF, HWE per group"]
+    I --> J["Imputation"]
+    J --> K["Post-imputation QC<br/>INFO or R2, MAF"]
+```
+
+Steps G and H are covered in @sec-structure. The rest are below.
+
+The examples use the public 1000 Genomes Affymetrix 6.0 genotypes (`ALL.wgs.nhgri_coriell_affy_6.20140825.genotypes_has_ped.vcf.gz`, in the Phase 3 `supporting/hd_genotype_chip/` folder of the 1000 Genomes FTP site). The Marees et al. tutorial uses HapMap data and PLINK 1.9; the logic is the same.
+
+## Importing the data
+
+Convert the VCF to PLINK binary format once, and keep the sex chromosomes. PLINK 2 refuses to import chrX without sex information:
+
+```text
+Error: chrX is present in the input file, but no sex information was provided;
+rerun this import with --psam or --update-sex.  --split-par may also be
+appropriate.
+```
+
+Dropping chrX with `--chr 1-22` makes the error go away, but then you cannot run the sex check. Supply sex instead, and split the pseudo-autosomal regions (PAR) into their own code so they are not treated as X:
+
+```bash
+# sex.txt: FID IID SEX (1 = male, 2 = female), from the 1000 Genomes pedigree file
+plink2 --vcf ALL.wgs.nhgri_coriell_affy_6.20140825.genotypes_has_ped.vcf.gz \
+       --update-sex sex.txt \
+       --split-par b37 \
+       --max-alleles 2 \
+       --make-bed --out 1kg_raw
+```
+
+`b37` matches this GRCh37 file; use `hg38` for GRCh38 data. Format details are in @sec-formats.
+
+## Missingness: call rates
+
+**Call rate** is the fraction of genotypes that were successfully called. **Missingness** is one minus the call rate. Compute it per sample and per variant:
+
+```bash
+plink2 --bfile 1kg_raw --missing --out qc/miss
+# qc/miss.smiss  per sample:  F_MISS column
+# qc/miss.vmiss  per variant: F_MISS column
+```
+
+(PLINK 1.9 writes the same information to `.imiss` and `.lmiss`.)
+
+A worked number: a SNP is genotyped in 100,000 people and 1,500 calls are missing. Missingness is 1.5%, call rate 98.5%. With `--geno 0.01` (call rate ≥ 99%) it is removed; with `--geno 0.02` it stays.
+
+High variant missingness points to a poorly performing probe or a batch problem. High sample missingness points to low DNA quantity or quality. Filter in two passes, variants before samples each time, so a few failed variants do not knock out good samples:
+
+```bash
+plink2 --bfile 1kg_raw --geno 0.2 --make-bed --out qc/s1
+plink2 --bfile qc/s1   --mind 0.2 --make-bed --out qc/s2
+plink2 --bfile qc/s2   --geno 0.02 --make-bed --out qc/s3
+plink2 --bfile qc/s3   --mind 0.02 --make-bed --out qc/s4
+```
+
+::: {.callout-warning title="Pitfall"}
+Missingness that differs between cases and controls creates false associations, even if both rates are low. If cases and controls were genotyped in different batches, test it with PLINK 1.9 `--test-missing` and drop variants with a small p-value (for example p < 10⁻⁵).
+:::
+
+## Sex check
+
+The **sex check** compares recorded sex with sex inferred from X-chromosome genotypes. Males have one X, so outside the PAR they should look homozygous. PLINK estimates an inbreeding coefficient F on X: by default, F > 0.8 is called male and F < 0.2 female.
+
+```bash
+plink --bfile qc/s4 --check-sex --out qc/sexcheck
+grep PROBLEM qc/sexcheck.sexcheck
+```
+
+Run it on an LD-pruned set of X variants for a cleaner signal. A mismatch means a sample swap, a recording error, or a sex-chromosome aneuploidy (for example, XXY). Remove the sample, or correct the recorded sex only if you can confirm it from the source records. Samples with F between 0.2 and 0.8 are ambiguous: inspect them before deciding.
+
+## Heterozygosity rate
+
+The **heterozygosity rate** is the fraction of a sample's non-missing genotypes that are heterozygous. Too high suggests DNA contamination (two people mixed in one sample). Too low suggests poor DNA quality or inbreeding. The usual rule removes samples more than 3 standard deviations (SD) from the mean.
+
+Compute it on autosomal, LD-pruned, common variants (@sec-structure explains pruning):
+
+```bash
+plink2 --bfile qc/s4 --chr 1-22 --maf 0.05 \
+       --indep-pairwise 200 50 0.2 --out qc/prune
+plink2 --bfile qc/s4 --extract qc/prune.prune.in --het --out qc/het
+```
+
+The `.het` file gives observed homozygous counts `O(HOM)` and the number of non-missing genotypes `OBS_CT` (`N(NM)` in PLINK 1.9). Then:
+
+$$
+\text{het rate} = \frac{\text{OBS\_CT} - \text{O(HOM)}}{\text{OBS\_CT}}
+$$
+
+A worked number: a sample has 100,000 non-missing pruned SNPs, of which 67,800 are homozygous. Its rate is $(100{,}000 - 67{,}800) / 100{,}000 = 0.322$. Suppose the cohort mean is 0.320 and the SD is 0.004. The bounds are $0.320 \pm 3 \times 0.004$, so 0.308 to 0.332. This sample passes. A sample at 0.345 fails on the high side and is a contamination suspect.
+
+```r
+het <- read.table("qc/het.het", header = TRUE, comment.char = "")
+het$rate <- (het$OBS_CT - het$O.HOM.) / het$OBS_CT
+m <- mean(het$rate); s <- sd(het$rate)
+fail <- het[het$rate < m - 3 * s | het$rate > m + 3 * s, c("X.FID", "IID")]
+write.table(fail, "qc/het_fail.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+```
+
+Plot heterozygosity against sample missingness. Bad samples tend to fail both and sit apart from the main cloud.
+
+::: {.callout-tip title="In practice"}
+Heterozygosity depends on ancestry. In a multi-ancestry cohort like 1000 Genomes, African-ancestry samples are more heterozygous than others, and a single ±3 SD rule will flag them for biology, not quality. Compute the bounds within each ancestry group (@sec-structure).
+:::
+
+## Hardy–Weinberg equilibrium
+
+**Hardy–Weinberg equilibrium** (HWE) predicts genotype counts from allele frequencies: $p^2$, $2pq$, $q^2$ (@sec-variation). A strong departure in a random sample usually means a genotyping error, such as a probe that cannot call one homozygote. Test it in controls only, because a true disease association can itself distort HWE in cases:
+
+```bash
+plink --bfile qc/s4 --hwe 1e-6 --make-bed --out qc/s5      # PLINK 1.9: controls only for case-control data
+plink2 --bfile qc/s4 --hardy midp --out qc/hwe              # report, per variant
+```
+
+Use p < 10⁻⁶ in controls (or in everyone, for a quantitative trait). Some pipelines add a looser filter in cases, such as p < 10⁻¹⁰. In a mixed-ancestry sample, HWE fails for population reasons (the Wahlund effect), so test within ancestry groups.
+
+## Minor allele frequency
+
+The **minor allele frequency** (MAF) is the frequency of the less common allele. Variants with very low MAF have little power in a single-variant test and are more likely to be calling errors. For a common-variant GWAS, keep MAF ≥ 1% in large samples. In small samples, a minor allele count (MAC) rule is better: MAF 1% in 200 people is only 4 copies.
+
+```bash
+plink2 --bfile qc/s5 --maf 0.01 --make-bed --out qc/clean
+plink2 --bfile qc/s5 --mac 20   --make-bed --out qc/clean_mac   # alternative
+```
+
+Rare variants are not thrown away for good. They are analyzed with gene-based tests (@sec-rare).
+
+## Duplicates
+
+Check for duplicate samples and duplicate variants explicitly. Duplicate samples (the same person sampled twice, or identical twins) show up as kinship near 0.5 in @sec-structure; keep the one with the higher call rate. Duplicate variants (same position and alleles) appear after merging arrays or batches. `--rm-dup` matches on variant ID, so first give every variant a position-based ID with `--set-all-var-ids`:
+
+```bash
+plink2 --bfile qc/clean --set-all-var-ids '@:#:$r:$a' --new-id-max-allele-len 50 \
+       --make-bed --out qc/clean_ids
+plink2 --bfile qc/clean_ids --rm-dup exclude-mismatch --make-bed --out qc/clean_dedup
+```
+
+## Typical thresholds
+
+| Check | Level | Typical threshold | Flag |
+| --- | --- | --- | --- |
+| Variant missingness | variant | > 2% (lenient pass at 20%) | `--geno 0.02` |
+| Sample missingness | sample | > 2% to 5% (lenient pass at 20%) | `--mind 0.02` |
+| Differential missingness | variant | p < 10⁻⁵ between cases and controls | `--test-missing` (1.9) |
+| Sex check | sample | F < 0.2 female, F > 0.8 male | `--check-sex` (1.9) |
+| Heterozygosity | sample | beyond mean ± 3 SD, per ancestry | `--het` |
+| Hardy–Weinberg | variant | p < 10⁻⁶ in controls | `--hwe 1e-6` |
+| MAF | variant | < 1% (or MAC < 20) | `--maf 0.01` |
+| Relatedness | sample | KING kinship > 0.0884 | `--king-cutoff` (@sec-structure) |
+| Imputation quality | variant | INFO or R² < 0.3 to 0.8 | filter on info file |
+
+## QC after imputation
+
+Imputation (@sec-lab) adds millions of variants, each with a quality score. Minimac and the Michigan and TOPMed imputation servers report **R²**; IMPUTE and BGEN-based tools report **INFO**. Both estimate how much information the imputed dosage carries compared with a true genotype, from 0 (none) to 1 (perfect).
+
+- Filter on quality: INFO ≥ 0.8 is a common choice for discovery; R² ≥ 0.3 keeps more variants and is often used for meta-analysis, where quality is weighed later.
+- Filter on MAF again, because imputation quality falls with frequency. A typical rule is MAF ≥ 1% with R² ≥ 0.8, or R² ≥ 0.3 for MAF ≥ 5%.
+- Do not apply HWE to imputed dosages. Imputed genotypes are pulled toward HWE by the reference panel, so the test says little.
+- Analyze **dosages** (expected allele counts, 0 to 2), not hard calls, in the association test.
+
+```bash
+# keep variants with R2 >= 0.8 from a Minimac info file (columns: SNP ... Rsq ...)
+awk 'NR > 1 && $7 >= 0.8 {print $1}' chr22.info > chr22.keep
+plink2 --vcf chr22.dose.vcf.gz dosage=DS --extract chr22.keep --maf 0.01 \
+       --make-pgen --out imputed/chr22
+```
+
+Check the column number for your server's info file version before you trust the `awk`.
+
+::: {.callout-note title="Try it"}
+Download the 1000 Genomes Affymetrix 6.0 VCF and run the steps in this chapter on chromosomes 1–22 and X. Record how many samples and variants each step removes in a small table. Then compute heterozygosity bounds twice, once for all samples and once within each super-population, and count how many samples each approach flags.
+:::

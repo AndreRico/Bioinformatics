@@ -1,0 +1,133 @@
+# Rare variants and gene-based tests {#sec-rare}
+
+Rare variants are too rare to test one at a time, so you group them, usually by gene, and test the group. The grouping, called a mask, is a biological hypothesis: which variants you think break the gene. Run a few masks, a few frequency cutoffs, and three complementary tests (burden, SKAT, SKAT-O), and combine them with a Cauchy-based method.
+
+## Why single-variant tests fail
+
+A single-variant test needs enough carriers to estimate an effect. A variant with MAF 0.01% appears in about 20 people out of 100,000. Even a large effect cannot reach p < 5 × 10⁻⁸ with so few carriers. Exome and genome sequencing find millions of such variants, so most of their signal is invisible to a standard GWAS (@sec-gwas).
+
+The answer is to **aggregate**. Instead of asking "does this variant affect the trait?", ask "do rare damaging variants in this gene, together, affect the trait?" This has three advantages:
+
+- **Power**: carriers of different variants in the same gene add up.
+- **Fewer tests**: about 20,000 genes instead of millions of variants. The usual gene-based threshold is $0.05 / 20{,}000 = 2.5 \times 10^{-6}$ per mask.
+- **Interpretation**: the result points to a gene, not to an anonymous variant.
+
+```{mermaid}
+flowchart LR
+    V["Annotated<br/>variants"] --> M["Masks<br/>pLOF, missense"]
+    V --> A["MAF cutoffs<br/>1%, 0.1%, 0.01%"]
+    M --> G["Variant sets<br/>per gene"]
+    A --> G
+    G --> B["Burden"]
+    G --> S["SKAT"]
+    G --> O["SKAT-O"]
+    B --> C["ACAT<br/>combined p"]
+    S --> C
+    O --> C
+```
+
+## Variant masks
+
+A **mask** is the rule that decides which variants enter a gene's set. It combines a functional annotation (from VEP, see @sec-postgwas) with a frequency cutoff.
+
+**Predicted loss of function** (pLOF) variants are expected to remove the gene product: stop-gained, frameshift, and essential splice-site (donor or acceptor) variants, plus start-lost in some definitions. Not every pLOF call is real. A stop-gained variant in the last exon may escape nonsense-mediated decay, for example. LOFTEE, the filter used by gnomAD (Karczewski et al., 2020, *Nature*), flags low-confidence calls; keep the high-confidence ones.
+
+**Missense** variants change one amino acid, and most are harmless. Masks therefore keep only missense variants predicted to be damaging. Common choices are a consensus of several predictors (SIFT, PolyPhen-2, and others, as in large exome studies) or a single score above a cutoff (REVEL, CADD, AlphaMissense).
+
+| Mask | Contents | Hypothesis |
+| --- | --- | --- |
+| M1 | High-confidence pLOF | Loss of the gene matters |
+| M2 | pLOF + deleterious missense (strict) | Damaging variants act alike |
+| M3 | pLOF + any missense | Broader, more variants, more noise |
+| Control | Synonymous | Should show nothing; a check on calibration |
+
+Each mask is run at several MAF cutoffs, for example < 1%, < 0.1%, and < 0.01%. A gene with a true signal from ultra-rare damaging variants is often found only at the strictest cutoff.
+
+::: {.callout-tip title="In practice"}
+Always run a synonymous mask. Synonymous variants rarely change function, so their QQ plot should sit on the diagonal. If it is inflated, the problem is in your QC or model, not in biology.
+:::
+
+## Burden tests
+
+A **burden test** collapses each person's rare variants into one score, then tests the score like a single variant:
+
+$$
+B_i = \sum_{j=1}^{m} w_j\, G_{ij}
+$$
+
+where $G_{ij}$ is the number of minor alleles person $i$ carries at variant $j$ and $w_j$ is an optional weight. Collapsing methods use an indicator instead ("carries at least one qualifying variant", as in CMC; Li and Leal, 2008, *American Journal of Human Genetics*). Weights often favor rarer variants (Madsen and Browning, 2009, *PLoS Genetics*).
+
+A toy gene with four variants:
+
+| Person | V1 | V2 | V3 | V4 | Burden $B$ | Carrier |
+| --- | --- | --- | --- | --- | --- | --- |
+| A | 0 | 1 | 0 | 0 | 1 | 1 |
+| B | 1 | 0 | 0 | 0 | 1 | 1 |
+| C | 0 | 1 | 1 | 0 | 2 | 1 |
+| D | 0 | 0 | 0 | 0 | 0 | 0 |
+
+The model is then $\text{logit}\,P(y_i=1) = \beta_0 + \beta_1 B_i + \text{covariates}$, and you test $\beta_1 = 0$.
+
+Burden tests are the most powerful option when most variants in the set are causal and act in the **same direction**. They lose power, and can cancel out, when some variants raise the trait and others lower it, or when most included variants are neutral.
+
+## SKAT
+
+The **sequence kernel association test** (SKAT; Wu et al., 2011, *American Journal of Human Genetics*) treats each variant's effect as random, with mean zero and a variance proportional to $w_j^2$. It tests whether that variance is zero. The statistic is a weighted sum of squared single-variant score statistics:
+
+$$
+Q_{\text{SKAT}} = \sum_{j=1}^{m} w_j^2\, S_j^2
+$$
+
+Because the scores are squared, effects in opposite directions do not cancel. SKAT is powerful when only a few variants are causal or directions are mixed. The default weight is the Beta(1, 25) density at the variant's MAF, which up-weights rarer variants.
+
+## SKAT-O
+
+**SKAT-O** (Lee et al., 2012, *American Journal of Human Genetics*) blends the two. It searches over a mixing parameter ρ from 0 (pure SKAT) to 1 (pure burden) and reports a p-value that accounts for the search. You do not need to know in advance which pattern a gene follows. It is the usual default in SAIGE-GENE and other tools.
+
+| Test | Best when | Weak when |
+| --- | --- | --- |
+| Burden | Most variants causal, same direction | Many neutral variants, or mixed directions |
+| SKAT | Few causal variants, or mixed directions | All variants causal and same direction |
+| SKAT-O | You do not know which pattern applies | Slightly less power than the right specialist test |
+
+## ACAT and combining results
+
+Running three masks, three MAF cutoffs, and three tests gives 27 correlated p-values per gene. The **aggregated Cauchy association test** (ACAT; Liu et al., 2019, *American Journal of Human Genetics*) combines them into one p-value. It transforms each p-value to a Cauchy variable, averages them, and transforms back. The result stays valid under arbitrary correlation between the tests, which is exactly the situation here. ACAT-V applies the same idea to single-variant p-values within a gene and does well when only one or two variants are causal.
+
+## Tools: SAIGE-GENE+ and REGENIE
+
+**SAIGE-GENE+** (Zhou et al., 2022, *Nature Genetics*) extends SAIGE (@sec-saige) to gene-based tests. It keeps the mixed model and SPA, so it controls relatedness and case–control imbalance. It collapses ultra-rare variants (MAC ≤ 10 by default) into a single pseudo-variant before testing, which improves calibration and speed. It needs the sparse GRM in step 1 and categorical variance ratios.
+
+The **group file** lists the variants and annotations for each gene:
+
+```text
+GENE1 var  1:55039839:C:T 1:55039842:G:A 1:55039974:G:T
+GENE1 anno lof            missense       missense
+```
+
+```bash
+Rscript step2_SPAtests.R \
+  --vcfFile=wes/chr1.vcf.gz --vcfFileIndex=wes/chr1.vcf.gz.csi --vcfField=GT \
+  --chrom=1 --minMAF=0 --minMAC=0.5 \
+  --GMMATmodelFile=step1/T2D.rda --varianceRatioFile=step1/T2D.varianceRatio.txt \
+  --sparseGRMFile=grm/sparse.mtx --sparseGRMSampleIDFile=grm/sparse.mtx.sampleIDs.txt \
+  --groupFile=groups/chr1.txt \
+  --annotation_in_groupTest=lof,missense:lof,missense:lof:synonymous \
+  --maxMAF_in_groupTest=0.0001,0.001,0.01 \
+  --is_output_markerList_in_groupTest=TRUE \
+  --SAIGEOutputFile=step2/T2D_chr1_gene.txt
+```
+
+Each annotation group is separated by commas, and `:` joins annotations into one mask. The output has one row per gene, mask, and MAF cutoff, with `Pvalue` (SKAT-O), `Pvalue_Burden`, `Pvalue_SKAT`, and a Cauchy-combined row per gene.
+
+**REGENIE** (Mbatchou et al., 2021, *Nature Genetics*) builds masks from an annotation file, a set list, and a mask definition file (`--anno-file`, `--set-list`, `--mask-def`), with frequency bins set by `--aaf-bins`. It runs burden tests by default and adds SKAT-O and ACAT-V with `--vc-tests skato,acatv`.
+
+An earlier idea worth knowing is **knowledge-driven binning**: BioBin (Moore et al., 2013, *BMC Medical Genomics*) groups rare variants into bins defined by genes, pathways, or regulatory regions from a biological knowledge base. Gene-based masks are a special case of the same idea (@sec-kg).
+
+::: {.callout-warning title="Pitfall"}
+Rare-variant tests are very sensitive to sequencing artifacts and to differences between batches. A gene can light up because cases were sequenced with a different capture kit. Check variant QC by batch, restrict to regions covered well in all samples, and look at the carriers of the top genes before you report them.
+:::
+
+::: {.callout-note title="Try it"}
+Build a toy dataset in R: 2,000 people, one gene with 15 variants at MAF between 0.05% and 0.5%, and a binary trait. In scenario A, give five variants the same positive effect. In scenario B, give two variants a positive and two a negative effect. Use the `SKAT` package to run burden, SKAT, and SKAT-O 200 times per scenario, and compare how often each test reaches p < 0.01.
+:::

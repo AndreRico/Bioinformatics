@@ -1,0 +1,62 @@
+project:
+  type: book
+  output-dir: _book
+
+lang: en
+
+book:
+  title: "Bioinformatics Handbook"
+  subtitle: "From molecular biology to biobank-scale genetic association studies: a practical, structured reference"
+  author: "Andre Rico"
+  repo-url: https://github.com/AndreRico/Bioinformatics
+  repo-branch: main
+  repo-actions: [edit, issue, source]
+  site-url: https://andrerico.github.io/Bioinformatics/
+  search: true
+  page-navigation: true
+  chapters:
+    - index.qmd
+    - part: "Part I — Foundations"
+      chapters:
+        - chapters/01-molecular-biology.qmd
+        - chapters/02-genetic-variation.qmd
+        - chapters/03-statistics-describing-data.qmd
+        - chapters/04-statistics-inference.qmd
+    - part: "Part II — Data and Infrastructure"
+      chapters:
+        - chapters/05-lab-and-sequencing.qmd
+        - chapters/06-file-formats.qmd
+        - chapters/07-computing-environment.qmd
+        - chapters/08-biobanks.qmd
+    - part: "Part III — Genetic Association Studies"
+      chapters:
+        - chapters/09-genotype-qc.qmd
+        - chapters/10-relatedness-structure.qmd
+        - chapters/11-gwas.qmd
+        - chapters/12-saige.qmd
+        - chapters/13-rare-variants.qmd
+        - chapters/14-meta-analysis.qmd
+        - chapters/15-post-gwas.qmd
+    - part: "Part IV — Applications"
+      chapters:
+        - chapters/16-pharmacogenomics.qmd
+        - chapters/17-knowledge-graphs.qmd
+  appendices:
+    - appendices/a-cheat-sheets.qmd
+    - appendices/b-templates.qmd
+    - appendices/c-reading-path.qmd
+    - appendices/d-glossary.qmd
+
+format:
+  html:
+    theme:
+      light: cosmo
+      dark: darkly
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-copy: true
+    link-external-newwindow: true
+  # PDF and EPUB come later (see adr/0001-quarto.md).
+
+editor: source

@@ -1,0 +1,195 @@
+# Knowledge graphs in biomedicine {#sec-kg}
+
+A knowledge graph stores biomedical facts as entities and typed relationships, so questions like "which drugs target genes near loci for this disease?" become a short traversal instead of a chain of table joins. The hard part is not the database: it is choosing what counts as one entity, which relationships you need, and where each fact came from. Design the graph around the questions you want to answer, and record provenance on every edge.
+
+This chapter draws on two books that approach the subject from different sides. *Building Knowledge Graphs* (Barrasa and Webber, O'Reilly, 2023) covers organizing principles, Cypher, graph data science, and knowledge-graph use cases. *Graph Databases in Action* (Bechberger and Perryman, Manning, 2020) covers graph data modeling, Gremlin traversals, and performance. The biomedical examples are this book's own.
+
+## Graphs, property graphs, and knowledge graphs
+
+A graph is a set of **nodes** (also called vertices) connected by **relationships** (edges). A **property graph** adds three things: each node has one or more **labels** (`Gene`, `Drug`), each relationship has a **type** and a direction (`TARGETS`), and both can carry key–value **properties** (`symbol: "CYP2C19"`, `p_value: 3e-12`).
+
+A **knowledge graph** is a property graph plus an **organizing principle**: a shared set of rules about what the labels and relationship types mean and how they relate. Without that layer you have a graph database full of data. With it, a query written by one team means the same thing to another.
+
+```{mermaid}
+graph LR
+    V["Variant<br/>rs4244285"] -- IN_GENE --> G["Gene<br/>CYP2C19"]
+    V -- ASSOCIATED_WITH --> T["Trait<br/>platelet reactivity"]
+    G -- AFFECTS_RESPONSE_TO --> D["Drug<br/>clopidogrel"]
+    D -- TREATS --> Dis["Disease<br/>coronary artery disease"]
+    G -- PARTICIPATES_IN --> P["Pathway<br/>drug metabolism"]
+    D -- TARGETS --> G2["Gene<br/>P2RY12"]
+    S["Source<br/>GWAS Catalog"] -. SUPPORTS .-> V
+```
+
+| Model | Strength | Typical query language |
+| --- | --- | --- |
+| Relational tables | Fixed schemas, aggregation, reporting | SQL |
+| Property graph | Multi-hop traversal, flexible schema | Cypher, Gremlin |
+| RDF triple store | Formal semantics, linked open data, inference | SPARQL |
+
+Both books argue the same test for "is this a graph problem?": if your important questions follow relationships of unknown or variable depth, use a graph. If they mostly filter and aggregate rows, a relational database or a data frame is simpler (@sec-computing).
+
+## Organizing principles: taxonomies and ontologies
+
+The organizing principle can be as light as a list of labels or as rich as a formal ontology. Barrasa and Webber recommend starting small and growing it: model what today's questions need, then extend. Biomedicine has a head start, because mature ontologies already exist.
+
+| Level | What it adds | Biomedical example |
+| --- | --- | --- |
+| Plain labels | Node and relationship types only | `Gene`, `Drug`, `TARGETS` |
+| Taxonomy | A hierarchy of categories | ATC drug classes |
+| Ontology | Typed relationships between concepts, with defined meaning | Gene Ontology, EFO, MONDO, HPO |
+
+Reuse standard identifiers instead of inventing your own: HGNC or Ensembl IDs for genes, dbSNP rsIDs or normalized `chr:pos:ref:alt` keys for variants (@sec-variation), EFO or MONDO for diseases and traits, ChEBI or ChEMBL for drugs, Reactome stable IDs for pathways. Standard IDs make loading, merging, and sharing much easier.
+
+Load the ontology itself into the graph. When `Disease` nodes hang off an `IS_A` hierarchy, a query for "cardiovascular disease" can include its descendants, such as coronary artery disease, without listing them.
+
+## Designing the model from the questions
+
+*Graph Databases in Action* teaches a three-step modeling process: write down the questions, draw a conceptual model on a whiteboard, then turn it into a logical model of labels, relationship types, and properties. Test the model by walking each question through it by hand before loading any data.
+
+For a gene–variant–drug–disease graph built from public sources:
+
+| Question | Path it needs |
+| --- | --- |
+| Which genes are mapped to GWAS loci for a disease? | `Disease <- ASSOCIATED_WITH - Variant - IN_GENE -> Gene` |
+| Which approved drugs target those genes? | `... Gene <- TARGETS - Drug` |
+| Which pharmacogenes affect response to those drugs? | `Drug <- AFFECTS_RESPONSE_TO - Gene` |
+| Which pathways connect two diseases? | `Disease ... Gene - PARTICIPATES_IN -> Pathway <- ... Disease` |
+
+Rules of thumb from both books:
+
+- **Nouns become nodes, verbs become relationships.** An entity you want to query, filter on, or connect to many things is a node.
+- **Put evidence on the edge.** A GWAS association has a p-value, effect size, study, and ancestry. Store them as relationship properties, or promote the association to its own node when it has many attributes or links to several entities.
+- **Use specific relationship types.** `TARGETS` and `METABOLIZES` are cheaper to traverse and clearer to read than a generic `RELATED_TO` with a `kind` property.
+- **Add shortcut edges only for hot paths.** Denormalizing a frequently walked two-hop path into one edge speeds it up, at the cost of keeping both in sync.
+
+::: {.callout-warning title="Pitfall"}
+Biological graphs have **supernodes**: nodes with very many relationships, such as a highly pleiotropic gene, a generic GO term, or a trait like "height". A traversal that passes through one fans out to millions of paths. Filter by relationship type and properties before crossing a supernode, and avoid starting queries from one.
+:::
+
+## Loading public data
+
+Load in a fixed order: create uniqueness constraints first, then nodes, then relationships. Use `MERGE` on the constrained key so reruns update existing nodes instead of creating duplicates. Barrasa and Webber compare three loading routes: an interactive importer for prototypes, `LOAD CSV` for incremental online loads, and `neo4j-admin database import` for the initial bulk load of a large graph into an empty database.
+
+Here is a load of the public GWAS Catalog associations file (<https://www.ebi.ac.uk/gwas/>), restricted to genome-wide significant hits:
+
+```text
+CREATE CONSTRAINT variant_id IF NOT EXISTS FOR (v:Variant) REQUIRE v.rsid IS UNIQUE;
+CREATE CONSTRAINT trait_id   IF NOT EXISTS FOR (t:Trait)   REQUIRE t.efo_uri IS UNIQUE;
+
+LOAD CSV WITH HEADERS FROM 'file:///gwas_catalog_associations.tsv' AS row
+FIELDTERMINATOR '\t'
+WITH row WHERE toFloat(row.`P-VALUE`) < 5e-8
+  AND row.SNPS STARTS WITH 'rs' AND row.MAPPED_TRAIT_URI <> ''
+MERGE (v:Variant {rsid: row.SNPS})
+MERGE (t:Trait {efo_uri: row.MAPPED_TRAIT_URI})
+  ON CREATE SET t.name = row.MAPPED_TRAIT
+MERGE (v)-[a:ASSOCIATED_WITH {pubmed_id: row.PUBMEDID}]->(t)
+  SET a.p_value = toFloat(row.`P-VALUE`), a.source = 'GWAS Catalog';
+```
+
+Repeat the pattern for the other sources: PharmGKB clinical annotations for `AFFECTS_RESPONSE_TO` (with the evidence level as a property), Reactome gene-to-pathway mappings for `PARTICIPATES_IN`, and a drug–target resource such as ChEMBL for `TARGETS`. Check each source's license before redistributing the combined graph.
+
+::: {.callout-tip title="In practice"}
+Clean before you load. Split multi-SNP and multi-trait rows, normalize gene symbols to current HGNC names, and record the source release on every relationship. Fixing identifiers inside a graph is far more work than fixing a TSV.
+:::
+
+## Querying: Cypher and Gremlin
+
+**Cypher** is a declarative language: you draw the pattern with ASCII art, and the engine finds matches. `(a)-[:R]->(b)` reads like the diagram above. It is used by Neo4j and several other databases, and is the basis of the ISO GQL standard. **Gremlin**, from Apache TinkerPop, is imperative: you describe a walk step by step. It runs on JanusGraph, Amazon Neptune, and Azure Cosmos DB, among others.
+
+A local query: drugs that target genes mapped to significant loci for a trait.
+
+```text
+MATCH (t:Trait {name: 'coronary artery disease'})<-[a:ASSOCIATED_WITH]-(v:Variant)
+      -[:IN_GENE]->(g:Gene)<-[:TARGETS]-(d:Drug)
+RETURN g.symbol, d.name, count(DISTINCT v) AS n_variants, min(a.p_value) AS best_p
+ORDER BY best_p
+LIMIT 20;
+```
+
+The same walk in Gremlin:
+
+```text
+g.V().has('Trait', 'name', 'coronary artery disease').
+  in('ASSOCIATED_WITH').out('IN_GENE').dedup().as('gene').
+  in('TARGETS').as('drug').
+  select('gene', 'drug').by('symbol').by('name').limit(20)
+```
+
+**Pathfinding** asks how two entities connect when you do not know the route. Bound the depth and forbid repeated nodes, or the query explodes on a densely connected graph (`simplePath()` in Gremlin; Cypher paths do not repeat relationships by default).
+
+```text
+MATCH (d:Drug {name: 'clopidogrel'}), (t:Trait {name: 'stroke'})
+MATCH p = shortestPath((d)-[*..4]-(t))
+RETURN [n IN nodes(p) | coalesce(n.symbol, n.name)] AS route;
+```
+
+Both books recommend the same performance habits: index the properties you start from, use parameters instead of string-built queries, put the most selective filter first, and inspect plans with `EXPLAIN` and `PROFILE` in Cypher or `profile()` in Gremlin.
+
+## Graph data science and graph machine learning
+
+Graph algorithms read the structure of the whole graph rather than one neighborhood. In Neo4j's Graph Data Science library, and in libraries such as NetworkX or igraph, the workflow is the same: project the subgraph you need into memory, run the algorithm, then write results back as properties or relationships.
+
+| Algorithm family | Biomedical use |
+| --- | --- |
+| Centrality (degree, PageRank, betweenness) | Find hub genes in an interaction network |
+| Community detection (Louvain, Leiden, WCC) | Find gene modules or disease clusters |
+| Similarity (Jaccard, node similarity) | Drugs with similar target profiles |
+| Pathfinding (Dijkstra, A*) | Shortest mechanistic routes between entities |
+| Link prediction | Candidate drug–disease or gene–disease links |
+
+Graph ML works in two ways. **Feature engineering** turns graph structure (degree, PageRank, community, embeddings) into columns for an ordinary model. **In-graph prediction** trains a model to add missing relationships or labels back into the graph. **Node embeddings** such as node2vec (Grover and Leskovec, 2016, *KDD*) or FastRP encode each node's neighborhood as a vector, so nodes with similar connections end up close together.
+
+```text
+CALL gds.graph.project('kg', ['Variant', 'Gene', 'Drug', 'Trait'],
+  {TARGETS: {orientation: 'UNDIRECTED'}, IN_GENE: {orientation: 'UNDIRECTED'},
+   ASSOCIATED_WITH: {orientation: 'UNDIRECTED'}});
+
+CALL gds.fastRP.stream('kg', {embeddingDimension: 128, randomSeed: 42})
+YIELD nodeId, embedding
+RETURN coalesce(gds.util.asNode(nodeId).symbol, gds.util.asNode(nodeId).rsid, gds.util.asNode(nodeId).name) AS node, embedding LIMIT 5;
+```
+
+Drug repurposing is the classic biomedical application: Hetionet (Himmelstein et al., 2017, *eLife*) integrated dozens of public resources into one graph and predicted drug–disease treatments from its path patterns.
+
+::: {.callout-warning title="Pitfall"}
+Link prediction on biomedical graphs mostly rediscovers what is already well studied. Highly connected genes look like good candidates simply because they have been researched more. Split training and test edges by time or by source, not at random, and compare against a degree-only baseline before trusting a prediction.
+:::
+
+## Knowledge-graph patterns for bioinformatics
+
+Barrasa and Webber describe several recurring knowledge-graph types. Each has a direct analogue in bioinformatics work.
+
+| Pattern | What it solves | Bioinformatics analogue |
+| --- | --- | --- |
+| Identity graph | Records from different sources that describe the same entity | rsIDs merged across dbSNP builds, gene aliases, disease terms mapped between EFO, MONDO, and ICD |
+| Metadata graph | Where data lives, what produced it, who uses it | Lineage from sample to VCF to QC to summary statistics (@sec-qc, @sec-gwas) |
+| Dependency graph | What breaks if a component changes | Which results used a given reference panel, genome build, or tool version |
+| Pattern detection | Suspicious or meaningful subgraph shapes | Network motifs, inconsistent annotations across sources |
+| Semantic search | Search by concept, not keyword | Literature indexed by gene, variant, and disease entities |
+
+**Identity resolution** links source records to one master entity: `SAME_AS` edges for strong identifiers (a shared Ensembl ID), `SIMILAR` edges with a score for weak evidence (a matching alias), then connected components to group them. Keep the source records; never overwrite them with the merged view.
+
+**Semantic search** annotates documents with entities. Named entity recognition tags genes, variants, and diseases in abstracts, and each tag is linked to its ontology ID. A search for a disease then also returns papers that mention only its subtypes, and documents become similar when they share entities rather than words.
+
+## LLMs over knowledge graphs
+
+Knowledge graphs and large language models complement each other. The graph supplies curated, traceable facts; the model supplies a natural-language interface. Two patterns are common: **text-to-query**, where the LLM writes Cypher from a question and the database executes it, and **graph retrieval-augmented generation**, where relevant subgraphs are retrieved and passed to the model as context for its answer.
+
+```{mermaid}
+sequenceDiagram
+    participant U as Researcher
+    participant L as LLM
+    participant K as Knowledge graph
+    U->>L: Which drugs target genes near CAD loci?
+    L->>K: Generated Cypher query
+    K-->>L: Rows with sources
+    L-->>U: Answer citing each source
+```
+
+The graph reduces hallucination only if the answer is grounded in returned rows and cites their provenance. Show users the generated query, restrict the model to read-only access, and validate queries against the schema before running them.
+
+::: {.callout-note title="Try it"}
+Download the GWAS Catalog associations file and the Reactome "NCBI gene to lowest-level pathway" mapping for human. Load a small graph with `Variant`, `Gene`, `Trait`, and `Pathway` nodes into a local Neo4j (or into NetworkX). Write one query that lists the five pathways containing the most genes mapped to significant loci for type 2 diabetes, then check how many of those genes are supernodes in your graph.
+:::

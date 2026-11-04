@@ -1,0 +1,202 @@
+# SAIGE: mixed models at biobank scale {#sec-saige}
+
+SAIGE lets you keep every person in a biobank, relatives included, and still get calibrated p-values for binary traits with very few cases. It does this in two steps: fit a null mixed model once, then test each variant with a fast score test corrected by a saddlepoint approximation. Most of the practical work is choosing the right inputs for step 1 and splitting step 2 into chunks.
+
+## Why a generalized mixed model
+
+Ordinary regression needs independent samples. In a biobank you either remove relatives, losing thousands of people, or you model them. A **linear mixed model** (LMM) adds a random genetic effect whose covariance follows the genetic relationship matrix (GRM). A **generalized linear mixed model** (GLMM) does the same for binary traits on the logit scale:
+
+$$
+\text{logit}\,P(y_i = 1) = X_i\alpha + G_i\beta + b_i, \qquad b \sim N(0,\ \tau\,\Psi)
+$$
+
+$X$ holds the covariates (age, sex, PCs), $G$ the variant being tested, $\Psi$ the GRM, and $\tau$ the genetic variance. The random effect $b$ absorbs relatedness and subtle population structure that the PCs miss (@sec-structure).
+
+Fitting this model for every variant is impossible at 500,000 people. Earlier LMM tools (BOLT-LMM, GCTA) also mis-handle unbalanced binary traits. **SAIGE** (Scalable and Accurate Implementation of GEneralized mixed model; Zhou et al., 2018, *Nature Genetics*) solves both problems.
+
+| Challenge | Example | SAIGE's answer |
+| --- | --- | --- |
+| Relatedness, cryptic structure | Siblings and cousins in a biobank | GRM random effect in the null model |
+| Continental and broad structure | Mixed-ancestry cohort | PCs as fixed covariates |
+| Case–control imbalance | 1 case per 100 controls | Score test with saddlepoint approximation |
+| Scale | 400,000 samples, 50 million variants | Null model fit once; cheap per-variant test |
+
+## How the two steps work
+
+**Step 1** fits the null model, without any test variant. It estimates $\alpha$ and $\tau$ with penalized quasi-likelihood and the AI-REML algorithm. It never stores the full GRM in memory; it computes products with the genotype matrix on the fly with preconditioned conjugate gradients. Step 1 also estimates the **variance ratio**.
+
+**Step 2** tests each variant with a **score test**. The score test needs only the null model, not a new fit per variant, which is why it is fast. Computing the exact score variance would need the full GRM for every variant. Instead, SAIGE computes a cheap variance that ignores relatedness and multiplies it by the variance ratio from step 1. The ratio is estimated on a few dozen random variants and is nearly constant across variants with MAC ≥ 20.
+
+For binary traits, the score statistic of a rare variant in an unbalanced design is far from normal. SAIGE uses the **saddlepoint approximation** (SPA) to get accurate tail p-values (@sec-gwas explains the problem).
+
+```{mermaid}
+flowchart TB
+    subgraph s0["Optional step 0"]
+        direction LR
+        P0["Pruned genotyped<br/>PLINK set"] --> SG["createSparseGRM.R"]
+    end
+    subgraph s1["Step 1: null model"]
+        direction LR
+        P1["Genotyped PLINK set"] --> F["step1_fitNULLGLMM.R"]
+        PH["Phenotype and<br/>covariates"] --> F
+        F --> RDA["model .rda"]
+        F --> VR["varianceRatio.txt"]
+    end
+    subgraph s2["Step 2: tests, per chromosome"]
+        direction LR
+        D["Dosages<br/>BGEN, VCF, PLINK"] --> T["step2_SPAtests.R"]
+        T --> O["Results per chunk"]
+    end
+    s0 -.-> s1
+    s1 --> s2
+    style s0 fill:transparent,stroke:#adb5bd
+    style s1 fill:transparent,stroke:#adb5bd
+    style s2 fill:transparent,stroke:#adb5bd
+```
+
+## Step 1: fit the null model
+
+Step 1 needs a PLINK file of high-quality **genotyped** variants (not imputed), a phenotype file, and the list of covariates. A few hundred thousand QC-passed common variants are typical; LD pruning keeps the run time down.
+
+```text
+pheno.txt
+IID      T2D  AGE  SEX  PC1      PC2      PC3      ...  PC10
+HG00096  0    54   1    0.0123   -0.0042  0.0031   ...
+HG00097  1    61   2    0.0118   -0.0051  0.0027   ...
+```
+
+Binary traits are coded 0/1 in SAIGE, not PLINK's 1/2.
+
+```bash
+Rscript step1_fitNULLGLMM.R \
+  --plinkFile=geno/array_pruned \
+  --phenoFile=pheno.txt \
+  --phenoCol=T2D \
+  --covarColList=AGE,SEX,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10 \
+  --qCovarColList=SEX \
+  --sampleIDColinphenoFile=IID \
+  --traitType=binary \
+  --LOCO=TRUE \
+  --nThreads=8 \
+  --IsOverwriteVarianceRatioFile=TRUE \
+  --outputPrefix=step1/T2D
+```
+
+For a quantitative trait, use `--traitType=quantitative` and `--invNormalize=TRUE` to apply the inverse normal transformation (@sec-gwas). `--qCovarColList` marks categorical covariates. Outputs are `step1/T2D.rda` (the null model), `step1/T2D.varianceRatio.txt`, and a log.
+
+## The sparse GRM option
+
+A **sparse GRM** keeps only the entries for related pairs and sets the rest to zero. It is much cheaper to store and use. Build it once per cohort, then reuse it for every phenotype:
+
+```bash
+Rscript createSparseGRM.R \
+  --plinkFile=geno/array_pruned \
+  --nThreads=8 \
+  --outputPrefix=grm/sparse \
+  --numRandomMarkerforSparseKin=2000 \
+  --relatednessCutoff=0.125
+```
+
+Then add `--useSparseGRMtoFitNULL=TRUE --sparseGRMFile=... --sparseGRMSampleIDFile=...` to step 1. The fit is far faster, and relatedness below the cutoff is ignored, so keep the PCs in the model. Gene-based tests (@sec-rare) also need the sparse GRM in step 2.
+
+## Step 2: test the variants
+
+Run step 2 on imputed dosages, one chromosome (or chunk) per job:
+
+```bash
+Rscript step2_SPAtests.R \
+  --bgenFile=imputed/chr22.bgen \
+  --bgenFileIndex=imputed/chr22.bgen.bgi \
+  --sampleFile=imputed/chr22.sample_ids.txt \
+  --AlleleOrder=ref-first \
+  --chrom=22 \
+  --minMAF=0 \
+  --minMAC=20 \
+  --GMMATmodelFile=step1/T2D.rda \
+  --varianceRatioFile=step1/T2D.varianceRatio.txt \
+  --LOCO=TRUE \
+  --is_Firth_beta=TRUE \
+  --pCutoffforFirth=0.05 \
+  --is_output_moreDetails=TRUE \
+  --SAIGEOutputFile=step2/T2D_chr22.txt
+```
+
+For VCF input, replace the BGEN flags with `--vcfFile`, `--vcfFileIndex`, and `--vcfField=DS` (dosages) or `GT`. For PLINK input use `--bedFile`, `--bimFile`, `--famFile`.
+
+## Key parameters
+
+| Parameter | Step | What it does | Typical value |
+| --- | --- | --- | --- |
+| `--traitType` | 1 | `binary` or `quantitative` | — |
+| `--covarColList` | 1 | Covariates in the phenotype file | age, sex, PC1–PC10 |
+| `--qCovarColList` | 1 | Which covariates are categorical | sex, batch |
+| `--invNormalize` | 1 | rINT for quantitative traits | `TRUE` for skewed traits |
+| `--LOCO` | 1, 2 | Leave-one-chromosome-out | `TRUE` |
+| `--useSparseGRMtoFitNULL` | 1 | Fit with the sparse GRM | `TRUE` at biobank scale |
+| `--chrom` | 2 | Chromosome name, as written in the dosage file | `22` or `chr22` |
+| `--minMAC`, `--minMAF` | 2 | Skip very rare variants | MAC 20 for single variants |
+| `--AlleleOrder` | 2 | Allele order in BGEN or PLINK input | `ref-first` for most BGEN |
+| `--is_Firth_beta` | 2 | Firth effect estimates for binary traits | `TRUE` |
+| `--pCutoffforFirth` | 2 | Apply Firth when p is below this | 0.01 – 0.05 |
+
+**LOCO** (leave one chromosome out) fits the random effect without the chromosome being tested. Otherwise the variant's own signal, captured partly by the GRM, is "adjusted away" and power drops.
+
+## Reading the output
+
+Each row is one variant. The main columns:
+
+| Column | Meaning |
+| --- | --- |
+| `CHR`, `POS`, `MarkerID` | Location and ID |
+| `Allele1`, `Allele2` | Allele2 is the effect allele |
+| `AC_Allele2`, `AF_Allele2` | Count and frequency of Allele2 |
+| `MissingRate`, `N` (or `N_case`, `N_ctrl`) | Missingness and sample size |
+| `BETA`, `SE` | Effect of Allele2 (log-odds for binary traits) and its SE |
+| `Tstat`, `var` | Score statistic and its variance |
+| `p.value` | P-value, SPA-corrected for binary traits |
+| `p.value.NA` | P-value from the normal approximation, for comparison |
+| `Is.SPA` | Whether SPA was applied |
+| `AF_case`, `AF_ctrl` | Allele2 frequency in cases and controls |
+
+::: {.callout-warning title="Pitfall"}
+For binary traits, `BETA` from the score test is an approximation and is biased for rare variants. Trust `p.value` for discovery. Report effect sizes from the Firth estimates (`--is_Firth_beta=TRUE`), and check that Allele2 is the allele you think it is before you meta-analyze.
+:::
+
+## Practical tips on a cluster
+
+Step 1 runs once per phenotype and takes hours; step 2 is many small, independent jobs. Run step 2 as an array job, one task per chromosome, and split big chromosomes further with `--rangestoIncludeFile`. A generic SLURM version:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=saige_step2
+#SBATCH --array=1-22
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --partition=normal
+CHR=${SLURM_ARRAY_TASK_ID}
+Rscript step2_SPAtests.R \
+  --bgenFile=imputed/chr${CHR}.bgen --bgenFileIndex=imputed/chr${CHR}.bgen.bgi \
+  --sampleFile=imputed/chr${CHR}.sample_ids.txt --AlleleOrder=ref-first \
+  --chrom=${CHR} --minMAC=20 --LOCO=TRUE \
+  --GMMATmodelFile=step1/T2D.rda --varianceRatioFile=step1/T2D.varianceRatio.txt \
+  --SAIGEOutputFile=step2/T2D_chr${CHR}.txt
+```
+
+The LSF equivalent uses `#BSUB -J "saige[1-22]"` and `$LSB_JOBINDEX` (@sec-computing).
+
+::: {.callout-tip title="In practice"}
+Install SAIGE from the official Docker image or conda package rather than compiling it. Pin the version, and record it with the results; output columns and defaults have changed between releases. The documentation is at https://saigegit.github.io/SAIGE-doc/.
+:::
+
+Other habits that save reruns:
+
+- Check that the sample IDs in the phenotype file, the PLINK file, and the dosage file match. Samples missing from any one are silently dropped; read the log for the count used.
+- Make sure `--chrom` matches the chromosome name in the dosage file exactly (`1`, `01`, or `chr1`).
+- Concatenate step 2 outputs, then compute λ and plot as in @sec-gwas.
+- For the same trait in several ancestry groups, run SAIGE per group and combine with METAL (@sec-meta).
+
+REGENIE (Mbatchou et al., 2021, *Nature Genetics*) is the main alternative. It replaces the GRM with whole-genome ridge regression and also uses Firth or SPA for binary traits. Both are sound; pick one and use it consistently across strata.
+
+::: {.callout-note title="Try it"}
+Using the 1000 Genomes genotypes after QC, simulate a binary phenotype with 5% cases and no genetic effect. Run SAIGE steps 1 and 2 on chromosome 22. Compare `p.value` with `p.value.NA` for variants with MAC below 50: how often would the normal approximation have given p < 10⁻⁴, and how often does SPA?
+:::

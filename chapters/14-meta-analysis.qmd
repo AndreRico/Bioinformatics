@@ -1,0 +1,169 @@
+# Meta-analysis {#sec-meta}
+
+Meta-analysis combines summary statistics from several studies, or several strata of one study, into one result with more power than any part. Use fixed-effect inverse-variance weighting by default, check heterogeneity for every significant variant, and spend most of your effort on harmonizing alleles, strands, and genome builds. Errors there produce no warning, only wrong answers.
+
+## Why meta-analyze
+
+GWAS power depends on sample size, and no single cohort is large enough for most traits. Meta-analysis pools results without sharing individual-level data, which privacy rules often forbid. It also combines strata of one study: ancestry groups analyzed separately (@sec-structure), or females and males (@sec-gwas). For a well-harmonized fixed-effect analysis, the result is almost as powerful as a joint analysis of all individuals.
+
+## Fixed and random effects
+
+A **fixed-effect** meta-analysis assumes one true effect β shared by all studies; differences between estimates are sampling error. A **random-effects** meta-analysis assumes each study has its own true effect, drawn from a distribution with mean μ and between-study variance τ².
+
+| | Fixed effect | Random effects |
+| --- | --- | --- |
+| Assumption | One true effect | True effects vary across studies |
+| Weights | $1/SE_i^2$ | $1/(SE_i^2 + \tau^2)$ |
+| Discovery power | Higher | Lower when τ² > 0 |
+| Typical use | GWAS discovery | Interpreting heterogeneous loci |
+| Tools | METAL, GWAMA, PLINK `--meta-analysis` | METASOFT, GWAMA, R `metafor` |
+
+GWAS consortia almost always use fixed effects for discovery. The classical random-effects test is conservative at genome-wide thresholds. METASOFT's RE2 model (Han and Eskin, 2011, *American Journal of Human Genetics*) fixes this when you expect heterogeneity. For multi-ancestry data, MR-MEGA models heterogeneity that tracks ancestry.
+
+## Inverse-variance vs sample-size weighting
+
+**Inverse-variance weighting** combines effect sizes. Each study's weight is $w_i = 1/SE_i^2$:
+
+$$
+\hat\beta = \frac{\sum_i w_i \hat\beta_i}{\sum_i w_i}, \qquad SE(\hat\beta) = \frac{1}{\sqrt{\sum_i w_i}}
+$$
+
+It needs β and SE on the same scale in every study: same trait units or transformation, same effect allele, same model.
+
+**Sample-size weighting** combines signed Z-scores, with weights $\sqrt{N_i}$:
+
+$$
+Z = \frac{\sum_i \sqrt{N_i}\, Z_i}{\sqrt{\sum_i N_i}}
+$$
+
+It needs only p-values, effect directions, and N. Use it when studies measured the trait on different scales or used different transformations. It gives a p-value but no pooled effect size. For case–control studies, use the effective sample size $N_{\text{eff}} = 4 / (1/N_{\text{cases}} + 1/N_{\text{controls}})$.
+
+A worked example, inverse-variance:
+
+| Study | β | SE | Weight $1/SE^2$ |
+| --- | --- | --- | --- |
+| 1 | 0.10 | 0.04 | 625 |
+| 2 | 0.04 | 0.03 | 1,111 |
+
+$\hat\beta = (625 \times 0.10 + 1{,}111 \times 0.04) / 1{,}736 = 0.0616$, $SE = 1/\sqrt{1{,}736} = 0.0240$, $Z = 2.57$, $p = 0.010$. The larger study pulls the estimate toward its own value.
+
+## Heterogeneity: Cochran's Q and I²
+
+**Cochran's Q** measures how far the study estimates scatter around the pooled one:
+
+$$
+Q = \sum_i w_i (\hat\beta_i - \hat\beta)^2
+$$
+
+Under homogeneity, Q follows $\chi^2$ with $k - 1$ degrees of freedom for $k$ studies. **I²** expresses the excess as a fraction of the total variation:
+
+$$
+I^2 = \max\!\left(0,\ \frac{Q - (k - 1)}{Q}\right)
+$$
+
+In the example: $Q = 625 \times (0.10 - 0.0616)^2 + 1{,}111 \times (0.04 - 0.0616)^2 = 0.92 + 0.52 = 1.44$, with 1 degree of freedom, $p = 0.23$. $I^2 = (1.44 - 1)/1.44 = 31\%$. Some heterogeneity, not significant.
+
+Rough guides: I² near 25% is low, 50% moderate, 75% high. With only two or three studies, Q has little power, so a non-significant Q does not prove homogeneity. Investigate heterogeneity at significant loci: differences in ancestry, phenotype definition, imputation quality, or a genuine biological difference.
+
+## Running METAL
+
+**METAL** (Willer, Li and Abecasis, 2010, *Bioinformatics*) is the standard tool for GWAS meta-analysis. It reads a script of commands, processes each input file, and writes one result per marker. Documentation: https://genome.sph.umich.edu/wiki/METAL_Documentation.
+
+A script that combines two SAIGE results files (@sec-saige):
+
+```text
+# meta_sex.metal
+SCHEME          STDERR
+AVERAGEFREQ     ON
+MINMAXFREQ      ON
+GENOMICCONTROL  OFF
+SEPARATOR       TAB
+
+MARKER     MarkerID
+ALLELE     Allele2 Allele1
+EFFECT     BETA
+STDERR     SE
+PVALUE     p.value
+FREQLABEL  AF_Allele2
+WEIGHT     N
+
+PROCESS  female_T2D.tsv
+PROCESS  male_T2D.tsv
+
+OUTFILE  meta_sex_ .tbl
+ANALYZE  HETEROGENEITY
+QUIT
+```
+
+```bash
+metal meta_sex.metal > meta_sex.log
+```
+
+- `SCHEME STDERR` selects inverse-variance weighting; `SCHEME SAMPLESIZE` (the default) selects Z-score weighting with `WEIGHT`.
+- `ALLELE` names the effect allele column first. In SAIGE output, Allele2 is the effect allele.
+- Column settings persist across `PROCESS` lines until you change them, so files with different headers need new settings before their `PROCESS`.
+- `GENOMICCONTROL OFF` avoids a second correction of statistics already calibrated by a mixed model.
+- `ANALYZE HETEROGENEITY` adds Q and I² columns.
+
+The output, `meta_sex_1.tbl`, has columns `MarkerName Allele1 Allele2 Freq1 FreqSE MinFreq MaxFreq Effect StdErr P-value Direction HetISq HetChiSq HetDf HetPVal`. `Direction` shows the sign in each study in input order, such as `+-`, with `?` where the marker was missing.
+
+::: {.callout-warning title="Pitfall"}
+METAL keeps markers present in only one study. Filter on the number of contributing studies (count the non-`?` characters in `Direction`) and on total N before you report. Otherwise single-study artifacts appear as "meta-analysis" hits.
+:::
+
+## Harmonizing before you combine
+
+Most meta-analysis errors come from inputs that look the same but are not. Check each file before `PROCESS`:
+
+| Check | What can go wrong | Fix |
+| --- | --- | --- |
+| Genome build | GRCh37 and GRCh38 positions mixed | Lift over to one build (UCSC liftOver, CrossMap) |
+| Marker IDs | rsIDs in one file, chr:pos in another | Use `chr:pos:ref:alt` in one build |
+| Effect allele | β refers to different alleles | Align to one allele; flip the sign of β when swapped |
+| Strand | Alleles reported on the minus strand | Complement non-palindromic alleles |
+| Palindromic SNPs | A/T and C/G cannot be resolved by name | Use frequencies; drop those with MAF > 0.4 |
+| Frequency | Allele frequency differs greatly from reference | Flag, then check alleles and strand |
+| Scale | Raw trait vs rINT; log-odds vs odds ratio | Same scale everywhere, or use SAMPLESIZE |
+| Quality | Poorly imputed variants | Apply the same INFO or R² filter in every file |
+
+METAL matches alleles by name and flips signs when the effect and other alleles are swapped. It cannot resolve palindromic SNPs. Plot each study's allele frequencies against a reference panel such as 1000 Genomes: a point on the anti-diagonal is a flipped allele.
+
+::: {.callout-tip title="In practice"}
+Write the harmonization as a script that outputs one standard file per study, with fixed column names, one build, and one effect-allele convention. Run METAL only on those files, and keep a table of how many variants each check removed per study.
+:::
+
+## Sex-stratified meta-analysis
+
+A sex-stratified analysis asks two questions: what is the effect in both sexes combined, and does it differ between them?
+
+```{mermaid}
+flowchart TB
+    Q["Shared QC, phenotype,<br/>covariates"] --> F["GWAS in females"]
+    Q --> M["GWAS in males"]
+    F --> H["Harmonize<br/>alleles and IDs"]
+    M --> H
+    H --> MA["METAL<br/>inverse-variance"]
+    H --> D["Difference test<br/>female vs male"]
+    MA --> R1["Combined effect,<br/>HetISq, HetPVal"]
+    D --> R2["Sex-differential<br/>variants"]
+```
+
+The two strata have different people, so their estimates are independent. Test the difference directly:
+
+$$
+Z_{\text{diff}} = \frac{\hat\beta_F - \hat\beta_M}{\sqrt{SE_F^2 + SE_M^2 - 2r\,SE_F\,SE_M}}
+$$
+
+With independent strata, $r = 0$, and this test is equivalent to METAL's `HetPVal` for two studies. When strata share samples, $r$ is estimated as the genome-wide correlation of the Z-scores (Randall et al., 2013, *PLoS Genetics*).
+
+A worked number: females $\hat\beta_F = 0.08$, SE 0.02; males $\hat\beta_M = -0.02$, SE 0.025. $Z_{\text{diff}} = 0.10 / \sqrt{0.0004 + 0.000625} = 0.10 / 0.032 = 3.12$, $p = 0.0018$.
+
+Interpret with care:
+
+- A variant significant in one sex and not the other is not evidence of a difference. Only the difference test is.
+- Apply multiple-testing correction to the difference test: genome-wide (5 × 10⁻⁸) for a genome-wide screen, or Bonferroni over the loci tested if you only test known hits.
+- Confirm promising differences with a genotype-by-sex interaction term in a joint model of all samples.
+
+::: {.callout-note title="Try it"}
+Download summary statistics for one trait from two independent studies in the GWAS Catalog. Harmonize them to the same build and effect allele, run METAL with `SCHEME STDERR` and `ANALYZE HETEROGENEITY`, and list the top ten loci with their `Direction` and `HetISq`. Then rerun with `SCHEME SAMPLESIZE` and compare the p-values at those loci.
+:::

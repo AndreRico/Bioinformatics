@@ -1,0 +1,195 @@
+# Genome-wide association studies {#sec-gwas}
+
+A genome-wide association study (GWAS) is millions of small regressions, one per variant, each asking whether genotype predicts the trait after adjusting for covariates. The regression is the easy part. The work is in the phenotype, the covariates, and checking that the genome-wide results are calibrated before you believe any single peak.
+
+## The pipeline
+
+A **GWAS** tests each variant across the genome for association with a trait. The steps before and after the test take most of the time.
+
+```{mermaid}
+flowchart LR
+    P["Phenotype<br/>definition and QC"] --> M["Model<br/>covariates"]
+    G["Genotype QC<br/>and imputation"] --> S["Structure:<br/>PCs, relatives"]
+    S --> M
+    M --> T["Association test<br/>per variant"]
+    T --> C["Calibration<br/>QQ plot, lambda"]
+    C --> R["Results<br/>Manhattan, loci"]
+    R --> F["Replication,<br/>meta-analysis, follow-up"]
+```
+
+Genotype QC is in @sec-qc, structure and relatives in @sec-structure, mixed models in @sec-saige, meta-analysis in @sec-meta, and follow-up in @sec-postgwas.
+
+## Preparing the phenotype
+
+Define the phenotype before you look at any genotype. Most errors that ruin a GWAS are phenotype errors.
+
+**Binary traits** (case–control) need explicit rules for who counts as a case, who counts as a control, and who is excluded. In electronic health records, a case often needs two or more diagnosis codes on different dates. Controls should be free of the disease and of closely related conditions. People with one code or a related condition go to "excluded", not "control".
+
+**Quantitative traits** need units checked, impossible values removed, and repeated measures summarized (first, mean, or median). Watch for medication effects: treated blood pressure or cholesterol is not the untreated value. A common fix adds a fixed amount for treated people.
+
+**Skewed quantitative traits** violate the normal-residual assumption of linear regression, and a few extreme values can drive false signals. The **rank-based inverse normal transformation** (rINT) replaces each value by the normal quantile of its rank. The result has mean 0 and SD 1, and keeps the order of individuals. The Blom version uses:
+
+$$
+y_i^{\text{rINT}} = \Phi^{-1}\!\left(\frac{r_i - 3/8}{n + 1/4}\right)
+$$
+
+where $r_i$ is the rank and $n$ the number of non-missing values. A worked example with five skewed values:
+
+| Value | Rank | $(r - 3/8)/(n + 1/4)$ | rINT |
+| --- | --- | --- | --- |
+| 2.1 | 1 | 0.119 | −1.18 |
+| 3.0 | 2 | 0.310 | −0.50 |
+| 4.2 | 3 | 0.500 | 0.00 |
+| 9.8 | 4 | 0.690 | 0.50 |
+| 25.0 | 5 | 0.881 | 1.18 |
+
+The outlier 25.0 no longer dominates. In R:
+
+```r
+rint <- function(x) {
+  ok <- !is.na(x)
+  out <- rep(NA_real_, length(x))
+  out[ok] <- qnorm((rank(x[ok], ties.method = "average") - 3/8) / (sum(ok) + 1/4))
+  out
+}
+```
+
+Effects are then in SD units of the transformed trait, not in the original units. A common, more robust variant is to regress the trait on covariates, apply rINT to the residuals, and then include the covariates again in the GWAS model (Sofer et al., 2019, *Genetic Epidemiology*).
+
+## Covariates and the additive model
+
+The standard model is **additive**: genotype is coded as 0, 1, or 2 copies of the effect allele (or a dosage between 0 and 2 for imputed data). Each copy shifts the trait, or the log-odds, by β.
+
+For a quantitative trait, linear regression:
+
+$$
+y = \beta_0 + \beta_1 G + \gamma_1 \text{age} + \gamma_2 \text{sex} + \textstyle\sum_k \delta_k \text{PC}_k + \varepsilon
+$$
+
+For a binary trait, logistic regression, with $\text{logit}\,P(y=1)$ on the left. $e^{\beta_1}$ is the odds ratio per copy.
+
+Typical covariates are age, sex, genotyping batch or array, and the top PCs (@sec-structure). Add others only when they are confounders, not consequences of the trait. Adjusting a blood-pressure GWAS for BMI, for instance, can create false signals through collider bias.
+
+## Running the test with PLINK 2
+
+PLINK 2 `--glm` fits linear regression for quantitative phenotypes and logistic regression for binary ones. With 1000 Genomes data you can practice on a simulated phenotype:
+
+```text
+pheno.txt                    covar.txt
+#FID     IID      T2D        #FID     IID      AGE  SEX  PC1      PC2     ...
+HG00096  HG00096  1          HG00096  HG00096  54   1    0.0123   -0.0042 ...
+HG00097  HG00097  2          HG00097  HG00097  61   2    0.0118   -0.0051 ...
+```
+
+Binary phenotypes use 1 = control, 2 = case, and missing as `NA` or −9 (or 0/1 with `--1`).
+
+```bash
+plink2 --pfile imputed/all_chr \
+       --pheno pheno.txt --pheno-name T2D \
+       --covar covar.txt --covar-name AGE,SEX,PC1-PC10 \
+       --covar-variance-standardize \
+       --glm hide-covar firth-fallback cols=+a1freq \
+       --ci 0.95 \
+       --out results/gwas
+```
+
+- `hide-covar` writes only the genotype term, not one row per covariate.
+- `firth-fallback` switches to Firth regression when standard logistic regression fails to converge, which happens most often with rare variants and few cases.
+- `--covar-variance-standardize` scales covariates so the fit is numerically stable.
+
+The output, `results/gwas.T2D.glm.logistic.hybrid`, has one row per variant: `#CHROM POS ID REF ALT ... A1 A1_FREQ FIRTH? TEST OBS_CT OR LOG(OR)_SE ... Z_STAT P ERRCODE`. `A1` is the tested (effect) allele. For a quantitative trait, the file ends in `.glm.linear` and reports `BETA`, `SE`, and `T_STAT`.
+
+## Significance and multiple testing
+
+The conventional **genome-wide significance** threshold is p < 5 × 10⁻⁸. It is a Bonferroni correction for about one million independent common-variant tests in European-ancestry genomes: 0.05 / 10⁶. It is not tied to how many variants you actually tested. Results with p < 10⁻⁵ are often called "suggestive", for follow-up only. African-ancestry genomes have less LD, more independent tests, and some authors use a stricter threshold.
+
+## Manhattan and QQ plots
+
+A **Manhattan plot** shows −log₁₀(p) for each variant against its genomic position. Real associations look like towers: many correlated variants rising together. A single isolated point is often an artifact.
+
+A **QQ plot** compares observed −log₁₀(p) with the values expected under the null. Points on the diagonal mean calibration. A departure only at the top right means a few true signals. A lift that starts early and spans the whole range means inflation.
+
+```r
+library(qqman)
+d <- read.table("results/gwas.T2D.glm.logistic.hybrid", header = TRUE, comment.char = "")
+d <- subset(d, !is.na(P))
+manhattan(d, chr = "X.CHROM", bp = "POS", snp = "ID", p = "P")
+qq(d$P)
+```
+
+## Genomic inflation λ
+
+The **genomic inflation factor** λ compares the median observed test statistic with its null expectation:
+
+$$
+\lambda = \frac{\text{median}(\chi^2_{\text{obs}})}{0.4549}
+$$
+
+where 0.4549 is the median of a $\chi^2$ with one degree of freedom. Convert p-values with `qchisq(1 - p, 1)` in R.
+
+| λ | Usual reading |
+| --- | --- |
+| < 0.95 | Deflation: overcorrection, or too few cases for rare variants |
+| 0.95 – 1.05 | Well calibrated |
+| 1.05 – 1.10 | Mild; can be polygenic signal in a large sample |
+| > 1.10 | Look for stratification, relatedness, batch effects, or phenotype errors |
+
+λ grows with sample size for polygenic traits, even without any confounding. Report $\lambda_{1000}$, scaled to 1,000 cases and 1,000 controls, to compare studies. LD score regression (Bulik-Sullivan et al., 2015, *Nature Genetics*) separates the two causes: its intercept reflects confounding, its slope reflects polygenicity.
+
+::: {.callout-warning title="Pitfall"}
+Do not compute λ on a mix of common and very rare variants from a test that is miscalibrated for rare ones. Compute it for MAF ≥ 1% and report the MAF range you used.
+:::
+
+## Case–control imbalance
+
+Logistic regression is unreliable when cases are few and the variant is rare. The problem is the number of minor alleles in cases, not the ratio itself. With 500,000 people and 1% cases (5,000), a variant with MAF 0.1% has only about $2 \times 5{,}000 \times 0.001 = 10$ copies expected in cases.
+
+With so few copies, the score statistic is far from normal, so p-values from the normal approximation are wrong in the tails. Score tests become anti-conservative (too many false positives). Wald tests lose power, and when no case carries the allele the estimate runs to infinity. You see it as a QQ plot inflated for rare variants and spurious peaks made of single variants.
+
+The fixes:
+
+- **Firth regression** penalizes the likelihood and keeps estimates finite (`firth-fallback` above, or `firth` for all variants). It is accurate and slower.
+- **Saddlepoint approximation** (SPA) computes accurate tail p-values for the score test at little cost (Dey et al., 2017, *American Journal of Human Genetics*). SAIGE combines it with a mixed model (@sec-saige).
+- **A minor allele count filter** in cases, or overall (for example MAC ≥ 20), removes the worst-behaved variants.
+
+Downsampling controls to balance the design is a poor fix: it throws away information.
+
+## Sex-stratified analysis
+
+Some genetic effects differ between females and males. A **sex-stratified GWAS** runs the analysis separately in each sex, with the same QC and covariates except sex itself:
+
+```bash
+plink2 --pfile imputed/all_chr --keep-females --pheno pheno.txt --pheno-name T2D \
+       --covar covar.txt --covar-name AGE,PC1-PC10 --covar-variance-standardize \
+       --glm hide-covar firth-fallback --out results/gwas_female
+plink2 --pfile imputed/all_chr --keep-males   --pheno pheno.txt --pheno-name T2D \
+       --covar covar.txt --covar-name AGE,PC1-PC10 --covar-variance-standardize \
+       --glm hide-covar firth-fallback --out results/gwas_male
+```
+
+Each stratum has roughly half the sample, so power drops. Then combine the two and test for a difference (@sec-meta). On the X chromosome, decide how male genotypes are coded (0/2 for dosage compensation, or 0/1) and say so; PLINK 2 controls this with `--xchr-model`.
+
+## Reporting
+
+Report enough that another group can reproduce and meta-analyze your study:
+
+| Item | Example |
+| --- | --- |
+| Variant | rsID and chromosome:position, with genome build |
+| Alleles | Effect allele and other allele, explicitly named |
+| Frequency | Effect allele frequency, in cases and controls if binary |
+| Effect | β with SE, or OR with 95% CI |
+| Evidence | p-value, test used, N (cases and controls) |
+| Quality | INFO or R² for imputed variants |
+| Calibration | λ (and λ₁₀₀₀), QQ plot |
+| Methods | Software and versions, covariates, QC thresholds |
+
+Share full **summary statistics** through the GWAS Catalog (https://www.ebi.ac.uk/gwas/), in its standard format, when consent allows. The STREGA guidelines (Little et al., 2009, *PLoS Medicine*) list what a genetic association paper should contain.
+
+::: {.callout-tip title="In practice"}
+Decide the phenotype definition, covariates, and thresholds before the first run, and write them down (@sec-templates). Changing them after you have seen the Manhattan plot turns analysis choices into a hidden source of false positives.
+:::
+
+::: {.callout-note title="Try it"}
+Download public summary statistics for a well-studied trait from the GWAS Catalog. Compute λ from the p-values for variants with MAF ≥ 1%, then draw the Manhattan and QQ plots with `qqman`. Count the genome-wide significant variants, and estimate how many separate towers they form.
+:::

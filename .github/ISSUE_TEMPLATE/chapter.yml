@@ -1,0 +1,41 @@
+name: Chapter or section
+description: Write or rewrite a chapter or section of the book.
+title: "Chapter: "
+labels: ["chapter"]
+body:
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: Part and chapter, or the file.
+      placeholder: "Part III — chapters/12-saige.qmd"
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What the reader should be able to do after reading
+      description: One or two sentences. This is the main definition of done.
+      placeholder: "Run SAIGE step 1 and step 2 on a binary trait and read the output."
+    validations:
+      required: true
+  - type: textarea
+    id: content
+    attributes:
+      label: Planned content
+      description: Topics, diagrams, and examples.
+      placeholder: |
+        - Null model and variance ratio
+        - Two-step workflow (Mermaid)
+        - Example command on public data
+    validations:
+      required: false
+  - type: checkboxes
+    id: done
+    attributes:
+      label: Definition of done
+      options:
+        - label: Text reviewed by someone else
+        - label: At least one diagram or concrete example
+        - label: A "Try it" box at the end
+        - label: New terms in the glossary

@@ -1,0 +1,133 @@
+# Biobanks and data resources {#sec-biobanks}
+
+A biobank links genotypes to health records for thousands to millions of people, and that link is what makes modern genetic association studies possible. Each resource differs in who is in it, what data it holds, and how you are allowed to touch it. Choose the resource by your question, then plan for the access process, which often takes longer than the analysis.
+
+## What a biobank is
+
+A biobank, in this book's sense, is a cohort with three things: **consented participants**, **genomic data** from their samples, and **phenotypes**, usually from electronic health records (EHR), surveys, and physical measurements.
+
+```{mermaid}
+flowchart LR
+    P["Consented<br/>participants"] --> S["Samples<br/>blood or saliva"]
+    P --> E["EHR, surveys,<br/>measurements"]
+    S --> G["Genotypes<br/>array, WES, WGS"]
+    G --> L["Linked by<br/>study ID"]
+    E --> L
+    L --> A["Research<br/>access"]
+```
+
+There are two broad designs. **Health-system biobanks** recruit patients during care, so phenotypes come from the EHR and are rich but uneven: sick people have more data. **Population cohorts** recruit volunteers from the general population and measure everyone the same way at baseline, then follow them through linked records.
+
+The genotypes usually arrive in the formats of @sec-formats, already QC-ed and imputed by the biobank. You still run your own QC for your study (@sec-qc).
+
+## Access models
+
+Resources fall into three access models. The more individual-level detail, the stricter the rules.
+
+| Model | What you get | What you must do | Examples |
+| --- | --- | --- | --- |
+| Open | Aggregate or fully public data, downloadable | Accept terms of use | 1000 Genomes, gnomAD, GWAS Catalog |
+| Controlled | Individual-level data, downloaded to your approved environment | Application, data use agreement, institutional sign-off, security attestation | dbGaP, NIAGADS |
+| Enclave (trusted research environment) | Individual-level data you analyze in place; only results leave | Registration, training, agreement; compute or access is often paid | UK Biobank RAP, All of Us Researcher Workbench, Epic Cosmos |
+
+The trend is toward enclaves. The data stays in one secured cloud environment, and you bring your code to it. You pay for compute, but you skip downloading terabytes and securing your own copy.
+
+```{mermaid}
+flowchart TD
+    Q["Research question"] --> I["Institutional review<br/>IRB or exemption"]
+    I --> A["Data access application<br/>research use statement"]
+    A --> D["Agreement signed<br/>by your institution"]
+    D --> T["Training and<br/>identity verification"]
+    T --> W["Access granted<br/>workspace or download"]
+    W --> R["Annual renewal<br/>or close-out"]
+```
+
+## Penn Medicine BioBank
+
+The Penn Medicine BioBank (PMBB, <https://pmbb.med.upenn.edu/>) is a health-system biobank at the University of Pennsylvania. Patients across the Penn Medicine health system consent to donate blood and to link their samples with their EHR for research. According to its public documentation, participants have genotyping array data, and many have exome sequencing, linked to diagnoses, labs, medications, and other clinical data.
+
+Access is through an application on the PMBB website. It is primarily for researchers at Penn, with external researchers usually working through a Penn collaborator. Like other health-system biobanks, its participants reflect the patient population of one region and one health system.
+
+## UK Biobank
+
+UK Biobank (<https://www.ukbiobank.ac.uk/>) is a population cohort of about 500,000 adults aged 40–69 recruited in the United Kingdom between 2006 and 2010. Everyone has genotyping array data with imputation, and exome and whole-genome sequencing have been released for nearly the whole cohort. Phenotypes include baseline questionnaires and measurements, imaging for a subset, and linked hospital, cancer, and death records.
+
+Access starts with a project application through the Access Management System (AMS). Your project's approved scope defines what you can study, so a new question may need an amendment. Analysis happens on the **UK Biobank Research Analysis Platform (RAP)**, built on DNAnexus, where you run Jupyter, RStudio, Spark, and command-line apps next to the data and pay for compute through a billing account.
+
+## All of Us
+
+The All of Us Research Program (<https://www.researchallofus.org/>) is an NIH program aiming to enroll one million or more people in the United States, with a deliberate focus on groups underrepresented in research. Data include EHR, surveys, physical measurements, wearable data, and genomic data: arrays, short-read WGS for a large share of participants, and long-read WGS for a subset.
+
+Everything happens in the **Researcher Workbench**, built on Terra and Google Cloud (@sec-computing). Your institution must sign a data use agreement, and you complete identity verification and training. Data come in tiers:
+
+| Tier | Contents | Who |
+| --- | --- | --- |
+| Public | Aggregate counts in the Data Browser | Anyone |
+| Registered | De-identified EHR, surveys, measurements, wearables | Registered researchers after training |
+| Controlled | Adds genomic data and more detailed fields | Additional training and approval |
+
+A workspace's tier is fixed when you create it. Genomic data come pre-processed in several cuts (exome-only, common-variant subsets, ClinVar sites) as Hail tables, VCF, PLINK, and BGEN, along with ancestry predictions, principal components, and relatedness files. Start from those cuts: converting the full variant dataset yourself is slow and expensive.
+
+::: {.callout-warning title="Pitfall"}
+Most enclaves forbid publishing or exporting small counts. All of Us, for example, does not allow you to show any participant count between 1 and 20. Check your tables and figures for small cells before you export results.
+:::
+
+## NIAGADS
+
+The National Institute on Aging Genetics of Alzheimer's Disease Data Storage Site (NIAGADS, <https://www.niagads.org/>) is an NIA-funded repository, hosted at the University of Pennsylvania, for genetic and genomic data on Alzheimer's disease, related dementias, and aging. It distributes large datasets such as those of the Alzheimer's Disease Sequencing Project.
+
+It follows the classic **controlled-access** model under the NIH Genomic Data Sharing Policy. A principal investigator applies through the NIAGADS Data Sharing Service with an eRA Commons login, names a Signing Official and an IT Director, writes a **research use statement** and a public non-technical summary, and attests that data will be secured to NIST SP 800-171 standards. If you plan to use the cloud, a cloud use statement names the provider. Approvals must be renewed, and derived data must be returned under a secondary data return plan.
+
+## TriNetX
+
+TriNetX (<https://trinetx.com/>) is a federated network of EHR data from healthcare organizations worldwide. Each organization contributes structured data: diagnoses, procedures, medications, labs, and vitals. Researchers query the network for **aggregate counts** to check feasibility and build cohorts, and run built-in analyses such as outcome comparisons with propensity-score matching.
+
+De-identified, row-level data can be downloaded for approved research, depending on the network and the institution's agreement. TriNetX contains essentially no genotypes. It is a tool for clinical epidemiology, cohort sizing, and replication of EHR-based findings, not for GWAS.
+
+## Epic Cosmos
+
+Epic Cosmos (<https://cosmos.epic.com/>) aggregates de-identified, longitudinal records from health systems that use the Epic EHR, covering hundreds of millions of patients in the United States. Because it draws from many systems, it follows patients across care settings better than any single health system can.
+
+Access is through a participating organization and requires Epic's training. Different roles allow exploring aggregate dashboards, querying record-level data, or analyzing data in R or Python inside the platform. Like TriNetX, it holds EHR data only, and computing resources inside the platform are limited.
+
+## Comparing the resources
+
+| Resource | Design | Genomic data | Phenotypes | Access model | Where you compute |
+| --- | --- | --- | --- | --- | --- |
+| Penn Medicine BioBank | Health-system biobank | Array, exome | EHR | Institutional application | Institutional HPC |
+| UK Biobank | Population cohort | Array, imputed, WES, WGS | Baseline, imaging, linked records | Project application, fee | DNAnexus RAP |
+| All of Us | National cohort | Array, short- and long-read WGS | EHR, surveys, wearables | Registered and controlled tiers | Researcher Workbench |
+| NIAGADS | Disease repository | Array, WES, WGS from many studies | Study-specific, mostly AD-related | Controlled (NIH GDS) | Your approved environment |
+| TriNetX | EHR network | Essentially none | Structured EHR | Institutional license | TriNetX platform |
+| Epic Cosmos | EHR aggregate | None | Structured EHR | Through Epic organization, training | Cosmos platform |
+
+## Phenotyping from the EHR
+
+EHR phenotypes are built from codes, and every definition is a choice. The basic tools:
+
+- **ICD codes** (ICD-9-CM before October 2015 in the United States, ICD-10-CM after) record diagnoses at each encounter.
+- **Phecodes** (Denny et al., 2010, *Bioinformatics*; <https://phewascatalog.org/>) group ICD codes into about 1,800 clinically meaningful phenotypes and define exclusion ranges for controls. They are the standard unit for phenome-wide association studies (PheWAS).
+- **Rule-based phenotypes** combine codes, medications, and labs. PheKB (<https://phekb.org/>) collects validated algorithms.
+
+A common case definition requires a code on **at least two distinct dates**, which removes rule-out diagnoses. Controls should have no code in the phecode's exclusion range and enough contact with the health system to have been diagnosed if they had the condition.
+
+::: {.callout-tip title="In practice"}
+Write the phenotype definition before you look at genetic results: codes, minimum count, date window, exclusions, and minimum record length. Save it as code. Changing a definition after seeing p-values is a quiet form of p-hacking.
+:::
+
+## Data-use agreements and good practice
+
+A data-use agreement is a legal contract between your institution and the data provider, and you are personally bound by it. The obligations are similar across resources:
+
+- Use the data only for the approved research purpose, and only with listed collaborators.
+- Never try to re-identify participants, or link to other data not covered by your approval.
+- Keep individual-level data in the approved environment; export only aggregate results that meet the minimum-count rule.
+- Acknowledge the resource in publications with its required wording, and report publications back where asked.
+- Renew on time, and destroy or close out data at the end of the project.
+- Bill compute to the right funding source, and watch costs: cloud workspaces charge for idle machines and stored files.
+
+Keep a short access log per project: which resource, which application or workspace, which agreement, who has access, and when it expires. It saves you during renewals and audits.
+
+::: {.callout-note title="Try it"}
+Open the All of Us Data Browser (<https://databrowser.researchallofus.org/>) and the UK Biobank Data Showcase (<https://biobank.ndph.ox.ac.uk/showcase/>). Pick one condition, such as type 2 diabetes, and find how each resource exposes it: as ICD codes, survey answers, or derived fields. Then look up the matching phecode on <https://phewascatalog.org/> and list the ICD-10 codes it includes.
+:::

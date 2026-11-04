@@ -1,0 +1,61 @@
+# Reading path {#sec-reading}
+
+Read in the order of the book: each topic has something to apply now and something for later. The classic papers in the second half give the history behind today's methods.
+
+## By topic
+
+| # | Topic | To apply now | To go deeper |
+| --- | --- | --- | --- |
+| 1 | GWAS overview | Bush & Moore (2012), [Chapter 11: Genome-wide association studies](https://pubmed.ncbi.nlm.nih.gov/23300413/), *PLoS Comput Biol* | Uffelmann et al. (2021), "Genome-wide association studies", *Nat Rev Methods Primers* |
+| 2 | Genotype QC | Marees et al. (2018), [A tutorial on conducting GWAS](https://doi.org/10.1002/mpr.1608), *Int J Methods Psychiatr Res* | Anderson et al. (2010), [Data quality control in genetic case-control association studies](https://doi.org/10.1038/nprot.2010.116), *Nat Protoc* |
+| 3 | QC in biobanks | Turner et al. (2011), [Quality control procedures for GWAS](https://pubmed.ncbi.nlm.nih.gov/21234875/), *Curr Protoc Hum Genet* | — |
+| 4 | Population structure | Novembre & Stephens (2008), [Interpreting PCA of spatial population genetic variation](https://pubmed.ncbi.nlm.nih.gov/18425127/), *Nat Genet* | — |
+| 5 | PLINK | [PLINK 2.0 documentation](https://www.cog-genomics.org/plink/2.0/) | Chang et al. (2015), "Second-generation PLINK", *GigaScience* |
+| 6 | Mixed models | [SAIGE documentation](https://saigegit.github.io/SAIGE-doc/) | Zhou et al. (2018), "Efficiently controlling for case-control imbalance and sample relatedness", *Nat Genet* |
+| 7 | Meta-analysis | [METAL documentation](https://genome.sph.umich.edu/wiki/METAL_Documentation) | Willer, Li & Abecasis (2010), "METAL: fast and efficient meta-analysis", *Bioinformatics* |
+| 8 | PheWAS | Bush, Oetjens & Crawford (2016), [Unravelling the human genome–phenome relationship](https://pubmed.ncbi.nlm.nih.gov/26875678/), *Nat Rev Genet* | — |
+| 9 | Pharmacogenomics | [CPIC guidelines](https://cpicpgx.org/guidelines/) and [PharmVar](https://www.pharmvar.org/) | [PharmCAT](https://pharmcat.org/) documentation |
+| 10 | Multi-omics | Ritchie et al. (2015), [Methods of integrating data to uncover genotype–phenotype interactions](https://pubmed.ncbi.nlm.nih.gov/25582081/), *Nat Rev Genet* | — |
+| 11 | Knowledge graphs | Barrasa & Webber (2023), *Building Knowledge Graphs*, O'Reilly | Bechberger & Perryman (2020), *Graph Databases in Action*, Manning |
+
+## Classic papers
+
+These explain why the field looks the way it does.
+
+**Genetic association**
+
+- Risch & Merikangas (1996). [The future of genetic studies of complex human diseases](https://pubmed.ncbi.nlm.nih.gov/8801636/). *Science*. The argument for association over linkage.
+- Cordell & Clayton (2005). [Genetic association studies](https://pubmed.ncbi.nlm.nih.gov/16182901/). *Lancet*.
+- Hirschhorn & Daly (2005). [Genome-wide association studies for common diseases and complex traits](https://pubmed.ncbi.nlm.nih.gov/15716906/). *Nat Rev Genet*.
+- Wellcome Trust Case Control Consortium (2007). [GWAS of 14,000 cases of seven common diseases and 3,000 shared controls](https://pubmed.ncbi.nlm.nih.gov/17554300/). *Nature*. The study that set the template.
+- Maher (2008). [Personal genomes: the case of the missing heritability](https://pubmed.ncbi.nlm.nih.gov/18987709/). *Nature*.
+- Hindorff et al. (2009). [Potential etiologic and functional implications of GWAS loci](https://pubmed.ncbi.nlm.nih.gov/19474294/). *PNAS*. The origin of the GWAS Catalog.
+
+**Epistasis and biological knowledge**
+
+- Cordell (2002). [Epistasis: what it means, what it doesn't mean, and statistical methods to detect it in humans](https://pubmed.ncbi.nlm.nih.gov/12351582/). *Hum Mol Genet*.
+- Ritchie et al. (2001). [Multifactor-dimensionality reduction reveals high-order interactions](https://pubmed.ncbi.nlm.nih.gov/11404819/). *Am J Hum Genet*.
+- Moore (2003). [The ubiquitous nature of epistasis in determining susceptibility to common human diseases](https://pubmed.ncbi.nlm.nih.gov/14614241/). *Hum Hered*.
+- Ritchie (2011). [Using biological knowledge to uncover the mystery in the search for epistasis in GWAS](https://pubmed.ncbi.nlm.nih.gov/21158748/). *Ann Hum Genet*.
+- Thomas et al. (2009). [Use of pathway information in molecular epidemiology](https://pubmed.ncbi.nlm.nih.gov/21072972/). *Hum Genomics*.
+
+**Phenotypes, biobanks, and study design**
+
+- Thornton-Wells, Moore & Haines (2004). [Genetics, statistics and human disease: analytical retooling for complexity](https://pubmed.ncbi.nlm.nih.gov/15522460/). *Trends Genet*.
+- McCarty et al. (2011). [The eMERGE Network](https://pubmed.ncbi.nlm.nih.gov/21269473/). *BMC Med Genomics*. Biobanks linked to electronic health records.
+- Peduzzi et al. (1996). [A simulation study of the number of events per variable in logistic regression](https://pubmed.ncbi.nlm.nih.gov/8970487/). *J Clin Epidemiol*. Why too few cases break a logistic model.
+
+## Skills outside genetics
+
+| Skill | Start with |
+| --- | --- |
+| Unix shell | [The Unix Shell, Software Carpentry](https://swcarpentry.github.io/shell-novice/) |
+| R | [R for Data Science](https://r4ds.hadley.nz/) |
+| Python data analysis | [pandas documentation, getting started](https://pandas.pydata.org/docs/getting_started/) |
+| SQL | [SQLBolt](https://sqlbolt.com/) |
+| Git | [Pro Git](https://git-scm.com/book/en/v2) and [Conventional Commits](https://www.conventionalcommits.org/) |
+| Notebooks | [Jupyter](https://jupyter.org/) |
+
+## How to read without stalling your project
+
+One paper per week, tied to the step you're on. After reading, write one line in your analysis plan about what you'll do differently. A read that changes nothing fades within weeks.

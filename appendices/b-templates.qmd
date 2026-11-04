@@ -1,0 +1,65 @@
+# Templates {#sec-templates}
+
+Copy these into your project and fill them in. They are short on purpose: a template nobody fills in protects nothing.
+
+## Analysis plan
+
+Write it before the first association test. It is what lets you, a reviewer, or your future self tell a planned analysis from a fishing trip.
+
+```markdown
+# Analysis plan — <trait> GWAS
+
+- **Date / version:** 2026-01-15 / v1
+- **Question:** Which common variants are associated with <trait>?
+- **Data:** <biobank>, release <x>, genome build GRCh38, imputed to <panel>
+- **Phenotype definition:** cases = <codes / criteria>; controls = <criteria>;
+  exclusions = <criteria>
+- **Ancestry groups analyzed:** <groups>, each analyzed separately, then meta-analyzed
+- **Covariates:** age, sex, PC1–PC10, genotyping batch
+- **QC thresholds:** geno 0.02, mind 0.02, MAF 0.01, HWE 1e-6, het ±3 SD,
+  KING 0.0884, INFO ≥ 0.8
+- **Model and software:** SAIGE <version>, binary trait, LOCO on
+- **Significance:** p < 5e-8; suggestive p < 1e-5
+- **Planned follow-up:** clumping (r² 0.1, 500 kb), annotation (VEP), eQTL lookup
+- **Changes after this date:** recorded below, with reason
+```
+
+## QC report
+
+One table per step makes the attrition easy to audit.
+
+```markdown
+| Step | Samples | Variants | Removed | Reason / threshold |
+| --- | --- | --- | --- | --- |
+| Raw data | | | | |
+| Variant missingness | | | | --geno 0.02 |
+| Sample missingness | | | | --mind 0.02 |
+| Sex check | | | | F-statistic |
+| Heterozygosity | | | | ±3 SD |
+| Relatedness | | | | KING > 0.0884 |
+| MAF / HWE | | | | MAF 0.01, HWE 1e-6 |
+| Final | | | | |
+```
+
+Attach the heterozygosity-versus-missingness plot, the PCA plot, and the QQ plot.
+
+## Methods paragraph
+
+A starting point for the methods section of a paper or report. Replace the brackets; delete what you did not do.
+
+> Genotypes were quality controlled with PLINK [version]. We excluded variants with missingness > [2]%, minor allele frequency < [1]%, or Hardy–Weinberg p < [1×10⁻⁶], and samples with missingness > [2]%, heterozygosity beyond ±3 SD of the mean, or discordant genetic and reported sex. Genetic ancestry was inferred by projecting samples onto [reference] principal components. Association testing used SAIGE [version], a generalized linear mixed model that accounts for relatedness and case–control imbalance, adjusting for age, sex, and the first [10] principal components. Genome-wide significance was set at p < 5×10⁻⁸. Results across ancestry groups were combined by inverse-variance-weighted fixed-effects meta-analysis in METAL [version].
+
+## Project folder layout
+
+```text
+project/
+├── README.md          # question, data source, how to rerun
+├── plan.md            # the analysis plan above
+├── config/            # thresholds and paths in one place
+├── scripts/           # numbered in run order: 01_qc.sh, 02_pca.sh, ...
+├── logs/              # scheduler and tool logs
+├── results/           # outputs, never edited by hand
+└── reports/           # QC report, plots, tables for the paper
+```
+
+Raw data stays where the data provider put it and is read in place. Never copy controlled-access data into a personal folder or a Git repository.

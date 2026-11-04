@@ -1,0 +1,147 @@
+# Relatedness and population structure {#sec-structure}
+
+Association tests assume that people are independent, and real cohorts break that assumption in two ways: relatives share long stretches of DNA, and people of similar ancestry share allele frequencies. Measure both before you test anything. Then either remove relatives or model them, and adjust for ancestry with principal components.
+
+## Why independence matters
+
+Both problems create the same symptom: test statistics that are too large across the genome. Relatedness correlates the residuals of the model, so the same genetic signal is counted more than once. Population structure is **confounding**: ancestry affects both allele frequencies and, through environment or genetics, the trait.
+
+A classic example. Group A has allele frequency 0.70 and a higher disease prevalence; group B has frequency 0.30 and a lower prevalence. Pool them and test, and every variant that differs in frequency between A and B looks associated with the disease. This is **population stratification**. The variant is a marker of group membership, not a cause.
+
+```{mermaid}
+flowchart LR
+    A["Ancestry"] --> G["Allele frequency"]
+    A --> E["Environment,<br/>other genes"]
+    E --> Y["Trait"]
+    G -. "spurious<br/>association" .-> Y
+    style A fill:transparent,stroke:#adb5bd
+```
+
+## LD pruning first
+
+Kinship, PCA, and heterozygosity all need a set of roughly independent variants. **Linkage disequilibrium** (LD) is the correlation between nearby variants (@sec-variation). Without pruning, a region with strong LD counts many times, and PCA can pick it up as a "population" axis.
+
+**LD pruning** walks along the genome in windows and removes one variant from each pair whose $r^2$ exceeds a threshold:
+
+```bash
+plink2 --bfile qc/clean --chr 1-22 --maf 0.05 \
+       --exclude range high_ld_regions_b37.txt \
+       --indep-pairwise 200 50 0.2 --out qc/prune
+# window of 200 variants, step 50, remove one of each pair with r2 > 0.2
+plink2 --bfile qc/clean --extract qc/prune.prune.in --make-bed --out qc/pruned
+```
+
+Also exclude the known long-range LD regions, such as the MHC on chromosome 6 and inversions on chromosomes 8 and 17 (listed by Price et al., 2008, *American Journal of Human Genetics*). A pruned set of 50,000 to 200,000 variants is plenty.
+
+::: {.callout-warning title="Pitfall"}
+Pruning is for structure and relatedness only. Never run the association test on the pruned set; you would throw away the variants you want to test.
+:::
+
+## Measuring relatedness
+
+Relatives share segments **identical by descent** (IBD): inherited from a recent common ancestor. Two related quantities describe it:
+
+- The **kinship coefficient** φ: the probability that one allele drawn at random from each person is IBD.
+- **PI_HAT** (π̂): the estimated proportion of the genome shared IBD, $\hat\pi = P(\text{IBD}=2) + 0.5\,P(\text{IBD}=1)$. It equals 2φ.
+
+A genetic relationship matrix (GRM) entry for a pair is also about 2φ.
+
+| Relationship | Kinship φ | PI_HAT / GRM | KING kinship range |
+| --- | --- | --- | --- |
+| Duplicate or identical twin | 0.5 | 1.0 | > 0.354 |
+| First degree (parent–child, full sibling) | 0.25 | 0.5 | 0.177 – 0.354 |
+| Second degree (grandparent, half sibling, uncle) | 0.125 | 0.25 | 0.0884 – 0.177 |
+| Third degree (first cousin) | 0.0625 | 0.125 | 0.0442 – 0.0884 |
+| Unrelated | 0 | 0 | < 0.0442 |
+
+The KING ranges are the cut points between degrees, at $2^{-1.5}$, $2^{-2.5}$, $2^{-3.5}$, and $2^{-4.5}$, from Manichaikul et al. (2010, *Bioinformatics*). Parent–child and full siblings have the same kinship but differ in IBD sharing. Parent–child pairs share exactly one allele IBD everywhere (P(IBD=1) ≈ 1). Siblings share 0, 1, or 2 alleles in proportions about 0.25, 0.5, 0.25.
+
+**KING-robust** is the method of choice. It stays accurate when the sample mixes ancestries, where method-of-moments PI_HAT estimates are biased upward. You can run it in PLINK 2 or in the stand-alone KING program:
+
+```bash
+plink2 --bfile qc/pruned --make-king-table --king-table-filter 0.0442 --out qc/king
+king -b qc/pruned.bed --related --degree 3 --prefix qc/king
+```
+
+The older PLINK 1.9 approach, used in the Marees et al. tutorial, is `--genome`:
+
+```bash
+plink --bfile qc/pruned --genome --min 0.1 --out qc/ibd
+# .genome columns include Z0, Z1, Z2 and PI_HAT
+```
+
+Anderson et al. (2010) remove one of each pair with PI_HAT > 0.1875, halfway between second and third degree. Marees et al. use 0.2. Both keep cousins and remove closer relatives.
+
+## Remove or model relatives
+
+You have two options, and the choice depends on the model you will use.
+
+| Approach | When | How |
+| --- | --- | --- |
+| Remove relatives | Ordinary regression (PLINK `--glm`); small or medium cohorts | Drop one of each related pair, keeping the most samples |
+| Keep and model | Large biobanks; mixed models such as SAIGE, REGENIE, BOLT-LMM | Keep everyone; the GRM or a whole-genome regression absorbs relatedness |
+
+To remove, prefer an algorithm that removes the fewest people rather than dropping pairs one at a time. PLINK 2 does this:
+
+```bash
+plink2 --bfile qc/pruned --king-cutoff 0.0884 --out qc/unrelated
+# writes qc/unrelated.king.cutoff.in.id (keep) and .out.id (removed)
+```
+
+When one member of a pair is a case and the other a control, keep the case if cases are scarce. Mixed models are the better answer at biobank scale, where removing relatives costs thousands of samples (@sec-saige).
+
+::: {.callout-tip title="In practice"}
+Compute principal components on unrelated people only, then project the relatives onto those axes. Close relatives in a PCA pull the components toward their family, and a PC that separates one family is useless as an ancestry covariate.
+:::
+
+## Principal component analysis
+
+**Principal component analysis** (PCA) summarizes genome-wide variation in a few axes. Each **principal component** (PC) is a weighted sum of standardized genotypes. In genetic data, the top PCs track ancestry: in 1000 Genomes, PC1 separates African from non-African samples, and PC2 separates East Asian from European samples.
+
+```bash
+plink2 --bfile qc/pruned --keep qc/unrelated.king.cutoff.in.id --pca 20 --out qc/pca
+# qc/pca.eigenvec: one row per sample, PC1..PC20
+# qc/pca.eigenval: variance explained by each PC
+```
+
+For hundreds of thousands of samples, use `--pca approx` or FlashPCA2. EIGENSOFT `smartpca` is the reference implementation (Patterson et al., 2006, *PLoS Genetics*; Price et al., 2006, *Nature Genetics*).
+
+How many PCs? Plot the eigenvalues (a scree plot) and look for where they flatten. Ten PCs is the common default for a single-ancestry GWAS. Twenty is not unusual for diverse cohorts. The absolute PC values have no meaning on their own; only the relative positions of samples do.
+
+## Ancestry inference with reference panels
+
+To label ancestry, place your samples on axes defined by a reference panel of known origin, such as 1000 Genomes (super-populations AFR, AMR, EAS, EUR, SAS) or the Human Genome Diversity Project. Compute PCs on the reference, then project your samples with the PC loadings (allele weights):
+
+```bash
+# 1. PCs and allele weights in the reference
+plink2 --pfile ref_1kg --freq counts --pca allele-wts vcols=chrom,ref,alt 10 --out ref_pcs
+
+# 2. Project study samples (same variants, same alleles)
+plink2 --pfile study --read-freq ref_pcs.acount \
+       --score ref_pcs.eigenvec.allele 2 5 header-read no-mean-imputation variance-standardize \
+       --score-col-nums 6-15 --out study_proj
+```
+
+Projected scores are on a different scale from `.eigenvec`, so project the reference samples with the same command and compare like with like. Then assign ancestry. Two common ways:
+
+- **Distance rule.** Keep samples within a few SD of a reference group's centroid on the top PCs. Marees et al. use this with multidimensional scaling.
+- **Classifier.** Train a random forest on reference PCs and labels, and assign a group when the predicted probability exceeds a cutoff such as 0.8. gnomAD uses this approach. Samples below the cutoff stay "other" or admixed.
+
+Then run the GWAS within each ancestry group and combine with meta-analysis (@sec-meta), or analyze all groups together with PCs and a mixed model.
+
+## Checking that it worked
+
+Adjustment works when the genome-wide test statistics look calibrated. The genomic inflation factor λ and the QQ plot (@sec-gwas) are the checks. With PCs and relatedness handled, λ for a modest trait should be close to 1. A residual excess that grows with sample size is usually polygenic signal, not confounding; LD score regression separates the two.
+
+Ancestry adjustment has limits. PCs capture broad structure well, but fine-scale structure and recent admixture leave residual confounding. Mixed models handle both relatedness and subtle structure better, which is part of why they dominate biobank analyses (@sec-saige).
+
+| Problem | Detect with | Adjust with |
+| --- | --- | --- |
+| Close relatives | KING kinship, PI_HAT | Remove one per pair, or GRM in a mixed model |
+| Cryptic distant relatedness | GRM | Mixed model |
+| Continental ancestry | PCA, reference projection | Stratify by ancestry; PCs as covariates |
+| Fine-scale structure | PCA on one ancestry group | PCs plus mixed model |
+
+::: {.callout-note title="Try it"}
+Using the 1000 Genomes Affymetrix 6.0 genotypes after the QC in @sec-qc, run `--make-king-table` and count the pairs in each degree of relatedness. Then compute ten PCs on the unrelated samples and plot PC1 against PC2, colored by super-population. Which super-population is most spread out, and what does that say about its history?
+:::

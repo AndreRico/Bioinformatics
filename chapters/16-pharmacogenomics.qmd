@@ -1,0 +1,231 @@
+# Pharmacogenomics {#sec-pgx}
+
+Pharmacogenomics turns a person's genotype into a drug-response phenotype through a fixed chain: variants become star alleles, two star alleles become a diplotype, and the diplotype becomes a phenotype such as "poor metabolizer". Every link in that chain can break silently, most often because the VCF is missing reference calls or the phase is unknown. Tools like PharmCAT automate the chain, but you still need to understand it to trust the output.
+
+**Not medical advice.** This chapter describes how pharmacogenomic data are processed and how public guidelines are organized. It does not tell anyone what drug or dose to take. Clinical decisions belong to clinicians, using validated clinical tests and the current version of each guideline.
+
+## What pharmacogenomics studies
+
+Pharmacogenomics (PGx) studies how inherited variation changes the way people absorb, activate, clear, or respond to drugs. Most actionable findings sit in a small set of genes, and most of those encode drug-metabolizing enzymes or transporters.
+
+The effect works through dose and exposure. A drug cleared by an enzyme builds up when the enzyme is weak. A prodrug activated by an enzyme fails when the enzyme is weak. The same genotype can therefore mean "higher toxicity risk" for one drug and "lower efficacy" for another.
+
+| Gene | Role | Example drugs with public CPIC guidelines |
+| --- | --- | --- |
+| *CYP2C19* | Metabolizing enzyme | clopidogrel, some SSRIs, voriconazole |
+| *CYP2D6* | Metabolizing enzyme | codeine, tramadol, tamoxifen, some antidepressants |
+| *CYP2C9*, *VKORC1* | Enzyme, drug target | warfarin, phenytoin, NSAIDs |
+| *DPYD* | Metabolizing enzyme | fluoropyrimidines (5-FU, capecitabine) |
+| *TPMT*, *NUDT15* | Metabolizing enzymes | thiopurines |
+| *SLCO1B1* | Liver transporter | simvastatin and other statins |
+| *HLA-B* | Immune presentation | abacavir, carbamazepine, allopurinol |
+
+Unlike a GWAS hit (@sec-gwas), a PGx allele usually has a known mechanism and a curated functional label. The analytic work is less about discovery and more about calling the right allele.
+
+## Star alleles: the naming system
+
+A star allele is a named haplotype: a specific combination of variants on one copy of a gene. `*1` is usually the reference, fully functional haplotype; other numbers are defined by one or more variants. The authoritative catalog for most pharmacogenes is PharmVar, the Pharmacogene Variation Consortium (Gaedigk et al., 2018, *Clin Pharmacol Ther*; <https://www.pharmvar.org>).
+
+Each star allele gets a **function** assignment from expert panels: normal, increased, decreased, no function, or uncertain. The function, not the number, is what drives interpretation.
+
+| Notation | Meaning |
+| --- | --- |
+| `CYP2C19*2` | One named haplotype |
+| `CYP2C19*1/*2` | A diplotype: one haplotype per chromosome copy |
+| `CYP2D6*1x2` | Gene duplication: two copies of `*1` on one chromosome |
+| `CYP2D6*5` | Whole-gene deletion |
+| `CYP2D6*4.001` | A suballele: same core variants, different extra variants |
+
+::: {.callout-warning title="Pitfall"}
+Star-allele numbers are not ordered by function, and the same number means different things in different genes. `CYP2C19*2` and `CYP2D6*2` share nothing except the label. Always read function from the gene's own allele table.
+:::
+
+## The CYP2C19*2 example
+
+`CYP2C19*2` is defined by rs4244285, a G>A change at position c.681 in exon 5. The variant does not change an amino acid directly. It creates a cryptic splice site, so the mRNA loses part of exon 5, the reading frame shifts, and a premature stop codon truncates the protein (de Morais et al., 1994, *J Biol Chem*). The result is a no-function allele.
+
+On GRCh38 the variant sits at chr10:94,781,859. In a VCF it looks like this:
+
+```text
+#CHROM  POS       ID         REF  ALT  QUAL  FILTER  INFO  FORMAT  S1    S2    S3
+chr10   94781859  rs4244285  G    A    .     PASS    .     GT      0|0   0|1   1|1
+```
+
+`*2` is common: roughly 15% of haplotypes in European-ancestry populations and closer to 30% in East Asian populations carry it. That makes it one of the most frequently actionable variants in pharmacogenomics.
+
+**Clopidogrel** is the standard public example. It is a prodrug, and CYP2C19 performs a key step in converting it to its active form. Carriers of no-function alleles form less active metabolite and show reduced platelet inhibition. The US FDA added a boxed warning about poor metabolizers to the clopidogrel label in 2010. The CPIC guideline (Lee et al., 2022, *Clin Pharmacol Ther*) describes alternative antiplatelet therapy for intermediate and poor metabolizers in specific cardiovascular indications. Read the guideline itself for the exact wording and scope.
+
+## From diplotype to phenotype
+
+The phenotype comes from combining the function of both haplotypes. CPIC standardized the terms so that labs and guidelines say the same thing (Caudle et al., 2017, *Genet Med*).
+
+```{mermaid}
+flowchart LR
+    V["Variants<br/>in VCF"] --> H["Star alleles<br/>per haplotype"]
+    H --> D["Diplotype<br/>*1/*2"]
+    D --> F["Function of<br/>each allele"]
+    F --> P["Phenotype<br/>Intermediate metabolizer"]
+    P --> G["Guideline<br/>lookup"]
+```
+
+For *CYP2C19*, the phenotype follows from allele function:
+
+| Diplotype example | Allele functions | Phenotype |
+| --- | --- | --- |
+| `*17/*17` | increased + increased | Ultrarapid metabolizer |
+| `*1/*17` | normal + increased | Rapid metabolizer |
+| `*1/*1` | normal + normal | Normal metabolizer |
+| `*1/*2`, `*2/*17` | one no-function allele | Intermediate metabolizer |
+| `*2/*2`, `*2/*3` | no function + no function | Poor metabolizer |
+
+For *CYP2D6* (and *CYP2C9* and *DPYD*), CPIC uses an **activity score**. Each allele gets a value, the two values are summed, and copy number multiplies an allele's value. The CYP2D6 consensus (Caudle et al., 2020, *Clin Transl Sci*) assigns:
+
+| Allele | Function | Activity value |
+| --- | --- | --- |
+| `*1`, `*2` | normal | 1 |
+| `*41` | decreased | 0.5 |
+| `*10` | decreased | 0.25 |
+| `*4`, `*5` | no function | 0 |
+
+The score maps to phenotype with fixed cut-offs: 0 is a poor metabolizer, 0.25 to 1 an intermediate, 1.25 to 2.25 a normal, and above 2.25 an ultrarapid metabolizer. Worked examples:
+
+$$
+\text{AS}(*1/*4) = 1 + 0 = 1 \Rightarrow \text{IM} \qquad
+\text{AS}(*1/*41) = 1 + 0.5 = 1.5 \Rightarrow \text{NM} \qquad
+\text{AS}(*1\text{x}2/*1) = 2 + 1 = 3 \Rightarrow \text{UM}
+$$
+
+## Why phasing matters
+
+A diplotype is only correct if you know which variants sit on the same chromosome. Two no-function variants in *cis* leave one working copy (intermediate). The same two variants in *trans* leave none (poor). An unphased VCF shows `0/1` at both sites and cannot tell these apart.
+
+A VCF does record phase when it is known: `|` means phased, `/` means unphased (@sec-formats). The question is whether your pipeline produced phase, and how reliable it is.
+
+| Phasing method | How it works | Fit for PGx |
+| --- | --- | --- |
+| Statistical | Population haplotypes, e.g. SHAPEIT, Eagle, Beagle | Good for common alleles; weaker for rare ones and underrepresented ancestries |
+| Read-backed | Reads spanning two variants, e.g. WhatsHap | Good when variants are close together |
+| Long reads | PacBio HiFi or Oxford Nanopore span whole genes | Best for complex genes such as *CYP2D6* |
+| Pedigree | Parent genotypes resolve the child's phase | Accurate, but needs family data |
+
+When phase is missing, callers enumerate every possible split of the heterozygous variants into two haplotypes and pick the combination that best matches known star alleles. That usually works for common diplotypes. It can return several equally good answers when rare alleles are involved.
+
+For biobank array or imputed data, phase usually comes from statistical phasing during imputation (@sec-biobanks). Report the phasing method alongside the PGx calls, and treat diplotypes involving rare alleles as lower confidence.
+
+## What a PGx-ready VCF needs
+
+Most PGx failures come from the VCF, not from the caller. A standard variant-only VCF lists positions where the sample differs from the reference. For PGx, a missing position is **unknown**, not reference. If the `*2` position is absent, the caller cannot conclude the sample is `*1`.
+
+Checklist for a PGx-ready VCF:
+
+- **Genome build.** PharmCAT expects GRCh38. Lift over or re-call older data first (@sec-variation).
+- **Reference calls present.** Every PGx-defining position must appear, with `0/0` where the sample is reference. From sequencing, emit all sites in the PGx regions (for example, a gVCF or an all-sites mode in your caller). From arrays, keep monomorphic sites instead of dropping them.
+- **A `GT` field.** Callers read hard genotypes, not dosages.
+- **Normalized variants.** Split multiallelic sites and left-align indels, so the representation matches the allele definitions.
+- **Consistent chromosome names** (`chr10` versus `10`) across files.
+- **Structural variants handled separately.** Deletions, duplications, and hybrid genes in *CYP2D6* cannot be called from a standard short-variant VCF.
+
+::: {.callout-warning title="Pitfall"}
+Filtering a VCF to "variants only" before PGx calling turns every reference call into a missing position. The output then shows partial calls or "not called" for genes that were perfectly genotyped.
+:::
+
+## The PharmCAT pipeline
+
+PharmCAT, the Pharmacogenomics Clinical Annotation Tool, is an open-source pipeline from PharmGKB and CPIC that goes from VCF to a report of genotypes, phenotypes, and matching guideline text (Sangkuhl et al., 2020, *Clin Pharmacol Ther*; <https://pharmcat.org>). It has four stages.
+
+```{mermaid}
+flowchart TB
+    IN["Input VCF<br/>GRCh38"] --> PRE["VCF Preprocessor<br/>normalize, keep PGx sites"]
+    PRE --> NAM["Named Allele Matcher<br/>variants to diplotypes"]
+    OC["Outside calls<br/>e.g. CYP2D6, HLA"] --> PH
+    NAM --> PH["Phenotyper<br/>diplotypes to phenotypes"]
+    PH --> REP["Reporter<br/>CPIC and DPWG text"]
+    REP --> OUT["HTML and JSON<br/>reports"]
+```
+
+1. **VCF Preprocessor.** A Python script that normalizes the input with `bcftools`, standardizes chromosome names, extracts the PGx positions, and can optionally split multi-sample VCFs into one file per sample.
+2. **Named Allele Matcher.** Reads each gene's allele definition table and the sample's genotypes at the defining positions. Phased data are matched directly; unphased data are expanded into all possible haplotype pairs. Each candidate allele is scored by how many defining positions it specifies, and the highest-scoring diplotype wins. Possible outputs include combination alleles such as `[*6 + *14]`, partial matches with an extra variant, and "not called" when the observed genotypes match no definition.
+3. **Phenotyper.** Converts diplotypes to function, activity scores, and standardized phenotypes. It also merges **outside calls**: diplotypes from specialized tools for genes PharmCAT cannot call from a VCF, such as *CYP2D6* copy-number states or *HLA* alleles.
+4. **Reporter.** Matches phenotypes to CPIC guidelines and, where available, DPWG (Dutch Pharmacogenetics Working Group) guidance, and writes HTML and JSON reports.
+
+The intermediate files (`.match.json`, `.phenotype.json`) are useful for research, because they hold calls for every sample in a machine-readable form.
+
+A typical run with the official Docker image:
+
+```bash
+# Preprocess and run all stages for one VCF
+docker run --rm -v "$PWD":/pharmcat/data pgkb/pharmcat \
+  pharmcat_pipeline data/sample.vcf.bgz -o data/results/
+
+# Add outside calls (tab-separated: gene, diplotype); the pipeline finds
+# <vcf base name>.outside.tsv or <sample ID>.outside.tsv next to the VCF
+printf "CYP2D6\t*1/*4\n" > sample.outside.tsv
+docker run --rm -v "$PWD":/pharmcat/data pgkb/pharmcat \
+  pharmcat_pipeline data/sample.vcf.bgz -o data/results/
+```
+
+Check the PharmCAT documentation for the flags of the release you use. The tutorial repository (<https://github.com/PharmGKB/PharmCAT-tutorial>) walks through a full run on public 1000 Genomes data (Li et al., 2023, *Clin Pharmacol Ther*).
+
+## Running PharmCAT at scale with WDL
+
+For thousands of samples, wrap PharmCAT in a workflow language so each VCF runs as an independent, containerized task. WDL (Workflow Description Language) is common on cloud platforms such as Terra and AnVIL, and runs locally with Cromwell or miniwdl (@sec-computing).
+
+```text
+version 1.0
+
+task pharmcat {
+  input {
+    File vcf
+    String docker_image   # pin an exact PharmCAT release tag
+  }
+  command <<<
+    pharmcat_pipeline ~{vcf} -o results/
+  >>>
+  output {
+    Array[File] reports = glob("results/*")
+  }
+  runtime {
+    docker: docker_image
+    memory: "8 GB"
+    cpu: 2
+  }
+}
+
+workflow pharmcat_batch {
+  input {
+    Array[File] vcfs
+    String docker_image
+  }
+  scatter (v in vcfs) {
+    call pharmcat { input: vcf = v, docker_image = docker_image }
+  }
+  output {
+    Array[Array[File]] all_reports = pharmcat.reports
+  }
+}
+```
+
+On cloud platforms, files have no shared working directory. A list of inputs must hold **full storage URIs**, one per line, such as `gs://bucket/vcfs/chr10_batch1.vcf.bgz`, not relative paths.
+
+::: {.callout-tip title="In practice"}
+Pin the PharmCAT version and record it in your outputs. Allele definitions and guideline text change between releases, so the same VCF can produce different reports a year apart.
+:::
+
+## CPIC guideline levels
+
+CPIC (Clinical Pharmacogenetics Implementation Consortium; <https://cpicpgx.org>) writes peer-reviewed guidelines that answer one question: *given a genotype that is already known, how should it inform prescribing?* CPIC does not address whether to order a test. Each gene–drug pair gets a level.
+
+| CPIC level | Meaning |
+| --- | --- |
+| A | Genetic information should be used to change prescribing; strong evidence |
+| B | Genetic information could be used to change prescribing; alternatives are about as good |
+| C | No prescribing action recommended, or evidence is limited |
+| D | Not enough evidence or actionability to recommend anything |
+
+Levels A and B get full guidelines. PharmGKB curates the underlying evidence, with its own clinical-annotation levels (1A to 4), and links each gene–drug pair to CPIC, DPWG, and drug-label annotations.
+
+For research reporting, keep three things separate: the **genotype** you called, the **phenotype** a standard translation gives, and the **guideline** that applies. Only the first is your measurement; the other two are lookups that change as guidelines are updated.
+
+::: {.callout-note title="Try it"}
+Download the 1000 Genomes GRCh38 VCF for chromosome 10 and extract rs4244285 (chr10:94781859) with `bcftools view -r chr10:94781859`. Count the `*2` allele frequency in two super-populations, then run PharmCAT on three samples from the tutorial repository and compare its *CYP2C19* diplotypes with your manual reading of the genotypes.
+:::

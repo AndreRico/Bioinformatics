@@ -1,0 +1,174 @@
+# Genetic variation {#sec-variation}
+
+Any two people differ at a few million positions in their genomes, and almost all of those differences are shared with many other people. Most analyses in this book rest on three properties of each variant: how common it is, what it does to a gene, and which neighboring variants travel with it. Learn to read those three and a GWAS result stops looking like a list of random positions.
+
+## Variants come in sizes
+
+The first question about a variant is how many bases it touches. Size decides which technology can detect it and which file format holds it.
+
+| Class | Size | Example | Detected well by |
+| --- | --- | --- | --- |
+| SNV (single-nucleotide variant) | 1 bp | `A>G` | Arrays, exome, genome |
+| MNV (multi-nucleotide variant) | 2+ adjacent bp | `AC>GT` | Sequencing |
+| Indel | 1 bp to about 50 bp | `ATG>A` (2-bp deletion) | Sequencing; arrays only for known ones |
+| Structural variant (SV) | over 50 bp | Inversion, translocation | Long reads, genome sequencing |
+| Copy-number variant (CNV) | about 1 kb to several Mb | Deletion or duplication of a gene | Arrays (intensity), genome sequencing |
+
+A **SNP** (single-nucleotide polymorphism) is an SNV common enough to be called a polymorphism, traditionally with a frequency of at least 1%. In practice the two terms are used loosely. Most variants carry an `rs` identifier from dbSNP, which stays stable across genome builds while positions do not.
+
+## Allele frequency and MAF
+
+The **allele frequency** is the share of all copies of a site, in a population, that carry a given allele. With $n$ diploid people there are $2n$ copies:
+
+$$p_{\text{ALT}} = \frac{2 \cdot n_{\text{hom-alt}} + n_{\text{het}}}{2n}$$
+
+The **minor allele frequency** (MAF) is the frequency of the less common allele, so it is always at most 0.5.
+
+A worked number: in 1,000 people, 640 are AA, 320 are AG, and 40 are GG. Then $p_G = (2 \cdot 40 + 320) / 2000 = 0.20$. G is the minor allele and the MAF is 0.20.
+
+| Category | MAF | Typical analysis |
+| --- | --- | --- |
+| Common | ≥ 5% | Single-variant GWAS (@sec-gwas) |
+| Low-frequency | 1–5% | Single-variant tests with large samples |
+| Rare | < 1% | Gene-based burden and SKAT tests (@sec-rare) |
+| Ultra-rare, singletons | seen once or a few times | Burden tests, clinical interpretation |
+
+Allele frequencies differ between populations. A variant that is rare in one ancestry group can be common in another, and the minor allele itself can switch. Check frequencies in a large reference such as [gnomAD](https://gnomad.broadinstitute.org/) before calling a variant rare.
+
+## Hardy–Weinberg equilibrium
+
+In a large, randomly mating population with no selection, migration, or mutation, genotype frequencies follow directly from allele frequencies. With allele frequencies $p$ and $q = 1 - p$:
+
+$$P(AA) = p^2, \quad P(Aa) = 2pq, \quad P(aa) = q^2$$
+
+This is **Hardy–Weinberg equilibrium** (HWE). A worked test: 1,000 people with 400 AA, 400 Aa, and 200 aa. Then $p = 0.6$, and the expected counts are 360, 480, and 160. The chi-square statistic is
+
+$$\chi^2 = \frac{40^2}{360} + \frac{80^2}{480} + \frac{40^2}{160} \approx 27.8$$
+
+With 1 degree of freedom, $p \approx 1.4 \times 10^{-7}$. There are too few heterozygotes.
+
+Real populations violate HWE a little, and selection on a disease variant violates it in cases. A strong deviation in controls, however, usually means a genotyping problem: a bad cluster, a paralog, or a CNV. That is why HWE is mainly a quality-control filter, used with thresholds you will see in @sec-qc.
+
+## Copy-number variants
+
+A CNV is a deletion or duplication of a stretch of DNA, so a person carries zero, one, three, or more copies instead of two. CNVs can cover whole genes and change their dosage directly.
+
+- Some are common and benign; others cause disease. The 22q11.2 deletion, for example, causes a well-known developmental syndrome.
+- Some genes vary in copy number as part of normal variation. *CYP2D6* can be deleted or present in three or more copies, which matters for drug metabolism (@sec-pgx).
+- Arrays detect CNVs from probe intensity (log R ratio and B allele frequency), with tools such as PennCNV. Sequencing detects them from read depth and split reads.
+
+SNP-based pipelines ignore CNVs, so a deletion can masquerade as an apparent homozygote. This is one source of HWE failure.
+
+## Predicted loss-of-function variants
+
+A **predicted loss-of-function** (pLoF) variant is one expected to abolish the function of the gene it falls in. The main classes are:
+
+- **stop-gained** (nonsense): creates a premature stop codon;
+- **frameshift**: an indel whose length is not a multiple of three, which scrambles the downstream reading frame;
+- **essential splice-site**: changes the two bases at either end of an intron (the donor or acceptor site);
+- in some definitions, **start-lost** and large deletions of coding exons.
+
+"Predicted" is the key word. A premature stop near the end of the last exon may escape nonsense-mediated decay and leave a working protein. Annotation tools such as VEP with the LOFTEE plugin flag these cases and keep only high-confidence pLoFs (Karczewski et al., 2020, *Nature*). gnomAD also reports gene-level constraint, such as LOEUF: genes with far fewer pLoFs than expected in the general population are likely intolerant to losing a copy.
+
+pLoF variants are mostly rare. They are usually analyzed together, per gene, in burden tests (@sec-rare).
+
+## Haplotypes and phasing
+
+A **haplotype** is the set of alleles on one physical chromosome across a region. You inherit one haplotype for each region from your mother and one from your father. Nearby alleles tend to be inherited together, because recombination rarely separates them in a few generations.
+
+A genotype call tells you which alleles you carry at each site. It does not tell you which alleles sit on the same chromosome. Recovering that is called **phasing**.
+
+```{mermaid}
+flowchart LR
+    subgraph unphased["Unphased: 0/1 at two sites"]
+        direction TB
+        U["Site 1: A/G<br/>Site 2: C/T"]
+    end
+    subgraph optA["Possibility 1: cis"]
+        direction TB
+        A1["Chromosome 1: G - T"]
+        A2["Chromosome 2: A - C"]
+    end
+    subgraph optB["Possibility 2: trans"]
+        direction TB
+        B1["Chromosome 1: G - C"]
+        B2["Chromosome 2: A - T"]
+    end
+    U --> optA
+    U --> optB
+    style unphased fill:transparent,stroke:#adb5bd
+    style optA fill:transparent,stroke:#adb5bd
+    style optB fill:transparent,stroke:#adb5bd
+```
+
+The difference can be biological. If both ALT alleles damage the same gene, *cis* leaves one intact copy, while *trans* (compound heterozygosity) leaves none. In pharmacogenomics, two variants on the same chromosome can define a different star allele than the same two variants apart.
+
+| | Unphased | Phased |
+| --- | --- | --- |
+| VCF separator | Slash, as in `0/1` | Vertical bar (pipe) |
+| Known | Alleles at each site | Alleles at each site and which chromosome carries them |
+| Produced by | Variant calling | Statistical phasing (SHAPEIT, Eagle, Beagle), read-backed or trio phasing |
+| Needed for | Single-variant association | Imputation, haplotype analysis, star-allele calling, compound heterozygosity |
+
+Statistical phasing is very accurate for common variants in large samples and less reliable for rare variants. Imputation always phases first, which is why imputed VCFs use pipes.
+
+## Linkage disequilibrium
+
+**Linkage disequilibrium** (LD) is the non-random association of alleles at nearby sites in a population. If allele G at one SNP almost always appears with allele T at the next one, the two are in strong LD. LD arises mostly because recombination has not yet separated them; drift, bottlenecks, admixture, and selection also shape it.
+
+Take two biallelic sites with alleles A/a and B/b. The basic measure compares the observed haplotype frequency with what independence predicts:
+
+$$D = p_{AB} - p_A p_B$$
+
+Two normalized versions are used in practice:
+
+$$D' = \frac{D}{D_{\max}} \qquad r^2 = \frac{D^2}{p_A(1-p_A)\,p_B(1-p_B)}$$
+
+A worked example: $p_A = 0.6$, $p_B = 0.7$, $p_{AB} = 0.5$. Then $D = 0.5 - 0.42 = 0.08$. Since $D > 0$, $D_{\max} = \min(p_A(1-p_B),\,(1-p_A)p_B) = 0.18$, so $D' = 0.44$. And $r^2 = 0.0064 / 0.0504 \approx 0.13$.
+
+| Measure | Range | Means | Use it for |
+| --- | --- | --- | --- |
+| $D'$ | 0 to 1 | 1 = no recombination seen between the sites | Defining haplotype blocks, history of recombination |
+| $r^2$ | 0 to 1 | How well one SNP predicts the other | Tagging, imputation, GWAS interpretation, pruning |
+
+$D'$ can be 1 even when the two SNPs have very different frequencies and predict each other poorly. For statistical work, $r^2$ is usually the number you want. LD decays with distance, varies along the genome with recombination hot spots, and differs between populations. African-ancestry genomes generally show shorter LD blocks than European or East Asian genomes. Online tools such as [LDlink](https://ldlink.nih.gov/) report population-specific LD.
+
+LD matters at every step of a GWAS:
+
+- **Arrays work because of LD.** A few hundred thousand genotyped SNPs tag millions of others, and imputation fills them in.
+- **A GWAS hit is a region, not a variant.** Every SNP in high LD with the causal one shows a signal. The top SNP is often not causal.
+- **Fine-mapping** uses LD to assign each SNP in a region a probability of being causal (@sec-postgwas).
+- **Clumping** groups significant SNPs by LD to count independent loci (@sec-postgwas).
+- **LD pruning** thins SNPs so that no remaining pair exceeds an $r^2$ threshold. It is used before PCA, relatedness, and heterozygosity checks, where correlated SNPs would otherwise distort the result (@sec-qc, @sec-structure). It is not used to choose SNPs for the association test itself.
+
+```bash
+# Prune: 50-SNP windows, step 5, drop one of each pair with r2 > 0.2
+plink2 --pfile chr22 --indep-pairwise 50 5 0.2 --out chr22_pruned
+
+# Pairwise r2 for SNPs within 500 kb of a lead SNP (PLINK 1.9)
+LEAD=rs0000000   # replace with an rsID present in your .bim file
+plink --bfile chr22 --r2 --ld-snp "$LEAD" --ld-window-kb 500 \
+      --ld-window 99999 --ld-window-r2 0.2 --out lead_ld
+```
+
+::: {.callout-warning title="Pitfall"}
+LD is population-specific. Using a European LD reference to clump, fine-map, or impute a cohort of another ancestry gives wrong answers without any error message. Match the LD reference to your sample.
+:::
+
+## Star alleles: haplotypes with names
+
+Pharmacogenomics names whole haplotypes rather than single variants. A **star allele** such as *CYP2C19\*2* is a defined combination of variants on one chromosome of a gene. The catalog of definitions is maintained by [PharmVar](https://www.pharmvar.org/).
+
+- *CYP2C19\*1* is the reference haplotype, with normal function.
+- *CYP2C19\*2* is defined by `rs4244285` (c.681G>A). The change creates an aberrant splice site, and the enzyme is not produced. It is a **no-function** allele.
+- *CYP2C19\*17* carries a promoter variant that increases expression.
+
+A person's two star alleles form a **diplotype**, such as \*1/\*2. The diplotype maps to a **phenotype**: \*1/\*1 is a normal metabolizer, \*1/\*2 an intermediate metabolizer, and \*2/\*2 a poor metabolizer. A single \*2 copy does not make someone a poor metabolizer.
+
+::: {.callout-tip title="In practice"}
+Star-allele calling needs phased data, and genes like *CYP2D6* also need copy-number calls. Use dedicated callers rather than reading single SNPs off a VCF. @sec-pgx covers the tools and how diplotypes map to guidance.
+:::
+
+::: {.callout-note title="Try it"}
+Download chromosome 22 for the 1000 Genomes Project phase 3 samples (the PLINK 2 resources page links ready-made files). Using only the EUR samples and then only the AFR samples, compute allele frequencies with `plink2 --freq` and the $r^2$ between one common SNP and its neighbors within 500 kb. Compare how far LD extends in each group, and find one SNP whose minor allele differs between the two.
+:::

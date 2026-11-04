@@ -1,0 +1,177 @@
+# Molecular biology for bioinformaticians {#sec-biology}
+
+Every genetic dataset you will touch is a measurement of one layer of a single pipeline: DNA is copied into RNA, and RNA is translated into protein. A genotype file records the DNA layer, an RNA-seq matrix records the RNA layer, and a methylation array records a control layer on top. Know which layer your data measures and most downstream choices follow.
+
+## The central dogma: DNA makes RNA makes protein
+
+The flow of information in a cell runs in one main direction. DNA stores it, RNA carries it, and proteins do most of the work.
+
+```{mermaid}
+flowchart LR
+    DNA["DNA<br/>genome"] -- "transcription" --> PRE["pre-mRNA"]
+    PRE -- "splicing" --> MRNA["mature mRNA"]
+    MRNA -- "translation" --> PROT["Protein"]
+    DNA -. "replication" .-> DNA
+    MIR["microRNA"] -. "represses" .-> MRNA
+    EPI["Epigenetic marks"] -. "control access" .-> DNA
+```
+
+- **DNA** is a double helix of two antiparallel strands. Each strand is a chain of four bases: adenine (A), cytosine (C), guanine (G), and thymine (T). A pairs with T, and C pairs with G.
+- **Transcription** copies a stretch of DNA, a gene, into RNA. RNA uses uracil (U) instead of T.
+- **Splicing** removes introns from the precursor RNA and joins the exons into a mature messenger RNA (mRNA).
+- **Translation** reads the mRNA three bases at a time. Each three-base *codon* specifies one amino acid or a stop signal.
+
+The human genome holds about 3.1 billion base pairs per haploid copy, on 22 autosomes plus the X and Y chromosomes, and the small mitochondrial genome. Only about 1–2% of it codes for protein. Roughly 20,000 protein-coding genes sit among many more non-coding genes and regulatory elements.
+
+## Genome coordinates: chromosome, position, build
+
+A location in the genome is a chromosome plus a position, written like `chr1:234` or `1:234`. That pair is only meaningful together with the **genome build** (reference assembly) it refers to.
+
+| Build | Also called | Released | Where you meet it |
+| --- | --- | --- | --- |
+| GRCh37 | hg19 | 2009 | Older arrays, many published summary statistics |
+| GRCh38 | hg38 | 2013 | Current sequencing, gnomAD v3+, most new biobank releases |
+| T2T-CHM13 | — | 2022 | First gap-free assembly; growing use in research |
+
+The same variant has different positions in different builds. Converting coordinates between builds is called **liftover** (UCSC liftOver, CrossMap, Picard LiftoverVcf).
+
+File formats also differ in how they count. You will see the formats themselves in @sec-formats.
+
+| Convention | Used by | First base is | A one-base variant at base 100 |
+| --- | --- | --- | --- |
+| 1-based, closed | VCF, GFF/GTF, SAM, PLINK `.bim` | 1 | `100` |
+| 0-based, half-open | BED, BAM internally, UCSC tables | 0 | `99  100` |
+
+::: {.callout-warning title="Pitfall"}
+Mixing GRCh37 and GRCh38 coordinates, or a 0-based and a 1-based file, produces no error. It produces joins that silently miss or mismatch variants. Record the build in every file name or header, and check it before any merge.
+:::
+
+Strand matters too. Positions refer to the forward (+) strand of the reference. A gene can lie on either strand, and older array manifests sometimes report alleles on the reverse strand. A/T and C/G SNPs are ambiguous, because their complement is the same pair of letters. Strand problems are handled in @sec-qc.
+
+## Bases, alleles, and genotypes
+
+At a variable position, each version of the sequence is an **allele**. The allele in the reference genome is the **reference allele** (REF); the other is the **alternate allele** (ALT). REF is not "normal" or "ancestral"; it is simply what the reference assembly happened to contain.
+
+Humans are diploid: you carry two copies of each autosome, one from each parent. Your **genotype** at a site is the pair of alleles you carry.
+
+| Genotype | Description | VCF `GT` | Alternate allele count |
+| --- | --- | --- | --- |
+| A/A | Homozygous reference | `0/0` | 0 |
+| A/G | Heterozygous | `0/1` | 1 |
+| G/G | Homozygous alternate | `1/1` | 2 |
+| unknown | Missing call | `./.` | NA |
+
+In VCF, `0` means REF and `1` means the first ALT. A slash (`0/1`) means the genotype is **unphased**: you know the two alleles but not which parental chromosome carries each. A pipe (`0|1`) means **phased**. @sec-variation explains why that matters.
+
+## Dosage: genotypes as numbers
+
+Association models need numbers, not letters. The standard encoding counts copies of one chosen allele: 0, 1, or 2. This is the **additive coding**, and the counted allele is the **effect allele** whose beta or odds ratio you will later report.
+
+When genotypes are **imputed** rather than directly measured, the imputation software (Minimac4, IMPUTE5, Beagle) gives a probability for each of the three genotypes. The **dosage** is the expected allele count:
+
+$$\text{DS} = 0 \cdot P(AA) + 1 \cdot P(AG) + 2 \cdot P(GG)$$
+
+It is a continuous number between 0 and 2.
+
+| Sample | P(AA) | P(AG) | P(GG) | Dosage (G) | Reading |
+| --- | --- | --- | --- | --- | --- |
+| S1 | 0.05 | 0.25 | 0.70 | 1.65 | Probably GG |
+| S2 | 0.50 | 0.45 | 0.05 | 0.55 | AA or AG; uncertain |
+| S3 | 0.00 | 1.00 | 0.00 | 1.00 | Confidently AG |
+| S4 | 0.80 | 0.20 | 0.00 | 0.20 | Probably AA |
+
+In a VCF, the same information sits in the `DS` and `GP` FORMAT fields:
+
+```text
+#CHROM  POS     ID     REF  ALT  QUAL  FILTER  INFO  FORMAT    S1
+1       123456  rs123  A    G    .     PASS    .     GT:DS:GP  1/1:1.65:0.05,0.25,0.70
+```
+
+Using dosages instead of rounding to hard calls keeps the imputation uncertainty in the model and usually gains power. PLINK 2, SAIGE, REGENIE, BOLT-LMM, and Hail all accept dosages. The PLINK 1 binary format (`.bed`) stores only hard calls, so converting dosages to it throws information away. @sec-formats covers BGEN and PGEN, which store dosages.
+
+::: {.callout-warning title="Pitfall"}
+"Dosage of what?" is the first question to ask. Some tools count ALT, some count the minor allele, and PLINK 1.9 counts its A1 allele, which defaults to the minor one. The same SNP can be coded 0/1/2 in one file and 2/1/0 in another, flipping the sign of every effect.
+:::
+
+## Genes, transcripts, and the transcriptome
+
+A gene is not one sequence but a template for several. A typical protein-coding gene has a promoter, a 5′ untranslated region (UTR), exons separated by introns, and a 3′ UTR. **Alternative splicing** combines exons in different ways, so one gene can yield several **transcripts** (isoforms) and several proteins.
+
+The **transcriptome** is the full set of RNA molecules in a cell or tissue at one moment. It includes:
+
+- **mRNA**, which is translated into protein;
+- **ribosomal and transfer RNA** (rRNA, tRNA), the translation machinery;
+- **long non-coding RNA** (lncRNA, over 200 nucleotides), with mostly regulatory roles;
+- **small RNAs**, such as microRNA (miRNA), small interfering RNA (siRNA), and piwi-interacting RNA (piRNA).
+
+Unlike the genome, the transcriptome is dynamic. It changes with cell type, developmental stage, time of day, disease, and drug exposure. That is why RNA-seq is used to find differentially expressed genes, define cell types, and link variants to expression (eQTL studies, used in @sec-postgwas).
+
+## Same DNA, different cells
+
+Almost every cell in your body carries the same genome, yet a neuron and a liver cell look and behave nothing alike. The difference lies in which genes each cell expresses, and how much. Several layers of control stack on top of each other.
+
+| Layer | Mechanism | Effect on cell identity |
+| --- | --- | --- |
+| Transcriptional | Transcription factors bind promoters and enhancers | Each cell type runs its own set of master regulators |
+| Epigenetic | DNA methylation, histone marks, chromatin accessibility | Locks expression states in and passes them to daughter cells |
+| RNA processing | Alternative splicing, alternative polyadenylation | Same gene, different proteins in different tissues |
+| Post-transcriptional | microRNAs and RNA-binding proteins | Fine-tunes how much protein each mRNA yields |
+| Signaling | Hormones, cell contact, environment | Tells a cell where it is and what to become |
+
+This is also why tissue matters in genetics. A variant can change expression in brain but not in blood, so expression and regulatory annotations must come from a relevant tissue.
+
+## Epigenetics
+
+Epigenetics is the set of heritable changes in gene activity that do not change the DNA sequence. "Heritable" here mainly means passed from a cell to its daughter cells. Inheritance across human generations is debated and, at most, limited.
+
+- **DNA methylation**: a methyl group is added to cytosine, mostly at CpG sites (a C followed by a G). Dense methylation at a promoter usually silences the gene. Arrays such as the Illumina EPIC measure hundreds of thousands of CpGs; bisulfite sequencing measures them genome-wide.
+- **Histone modifications**: DNA wraps around histone proteins. Chemical marks on histone tails (acetylation, methylation, phosphorylation) loosen or tighten that packing. H3K27ac, for example, marks active enhancers; H3K27me3 marks repressed regions.
+- **Chromatin accessibility**: open chromatin can be read; closed chromatin cannot. ATAC-seq maps open regions.
+- **Non-coding RNA**: lncRNAs and miRNAs help direct where the other mechanisms act.
+
+Epigenetic marks respond to age, diet, smoking, and other exposures. They also differ by cell type, which is the main confounder in methylation studies of mixed tissues such as whole blood.
+
+## MicroRNA
+
+MicroRNAs are short non-coding RNAs, about 22 nucleotides long, that reduce how much protein a target mRNA produces. They act as dimmers rather than on/off switches.
+
+Their life cycle is well defined. A long primary transcript (pri-miRNA) is cut in the nucleus into a hairpin (pre-miRNA). The enzyme Dicer trims it in the cytoplasm, and one strand is loaded into an Argonaute protein. The resulting complex binds target mRNAs, mostly in their 3′ UTR, and causes their decay or blocks translation.
+
+Binding needs only a short match: the **seed** region, nucleotides 2–8 of the miRNA. One miRNA can therefore regulate hundreds of genes, and one gene can be targeted by many miRNAs. miRNAs also cross-talk with epigenetics: they target DNA methyltransferases and histone modifiers, and methylation of their own promoters can silence them.
+
+miRNAs are stable in blood and other body fluids, which makes them attractive **biomarkers** of disease and environmental exposure. Profiling options include qRT-PCR, microarrays, and small-RNA sequencing, each with trade-offs in sensitivity and discovery (Pritchard, Cheng and Tewari, 2012, *Nature Reviews Genetics*). Reference names and sequences live in [miRBase](https://www.mirbase.org/).
+
+::: {.callout-tip title="In practice"}
+In miRNA studies, normalization and sample handling drive results more than the statistics do. Hemolysis releases red-cell miRNAs into serum and plasma, and platelet contamination does the same. Check for these before trusting a "biomarker".
+:::
+
+## Extracellular vesicles
+
+Cells release small membrane-bound particles, **extracellular vesicles** (EVs), that carry proteins, lipids, and RNA, including miRNAs, from one cell to another. Their membrane protects that cargo from degradation in blood.
+
+| Type | Typical size | Origin |
+| --- | --- | --- |
+| Exosomes (small EVs) | about 30–150 nm | Inner vesicles of endosomes, released when the endosome fuses with the cell membrane |
+| Microvesicles | about 100–1,000 nm | Bud directly off the plasma membrane |
+| Apoptotic bodies | about 1–5 µm | Fragments of dying cells |
+
+Sizes overlap, and most isolation methods cannot separate the types cleanly. Current guidelines therefore recommend the generic term "extracellular vesicle" unless the origin is shown (Théry et al., 2018, MISEV2018, *Journal of Extracellular Vesicles*).
+
+Because EVs carry markers of the cell they came from, they offer a possible "liquid biopsy" of tissues you cannot sample directly. **Neuronally enriched EVs** are the leading example. Researchers capture vesicles from serum or plasma using antibodies against neuronal surface proteins, most often L1CAM, and measure proteins such as tau, amyloid-β, or α-synuclein. The aim is a blood test that tracks Alzheimer's disease, Parkinson's disease, or brain injury.
+
+The idea is promising but not settled. L1CAM is not exclusive to neurons, and one study found that it is mostly present in soluble form in plasma rather than on vesicles (Norman et al., 2021, *Nature Methods*). Treat neuronal-EV results as research findings, not validated diagnostics.
+
+## What this means for your data
+
+Each molecular layer becomes a different kind of dataset, with its own formats and statistics.
+
+| Layer | Typical assay | Typical data | Where in this book |
+| --- | --- | --- | --- |
+| DNA sequence | Genotyping array, exome, genome | VCF, PLINK, BGEN; genotypes 0/1/2 | @sec-lab, @sec-formats, @sec-gwas |
+| Epigenome | Methylation array, ATAC-seq | Beta values, peaks | @sec-postgwas (annotation) |
+| Transcriptome | RNA-seq, small-RNA-seq | Count matrices | @sec-stats-describe (count distributions) |
+| Protein and EV cargo | Immunoassays, proteomics | Concentrations | @sec-stats-inference |
+
+::: {.callout-note title="Try it"}
+Look up the variant `rs4244285` in [Ensembl](https://www.ensembl.org/) and in the GRCh37 archive (grch37.ensembl.org). Write down its chromosome, its position in both builds, its REF and ALT alleles, and the gene it falls in. Then explain, in one sentence, why a file of positions without a stated build is incomplete. You will meet this variant again in @sec-variation and @sec-pgx.
+:::

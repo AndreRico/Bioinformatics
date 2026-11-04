@@ -1,0 +1,145 @@
+# Statistics I: describing data and uncertainty {#sec-stats-describe}
+
+Biological data is noisy, skewed, and huge, so the first job is always to describe it honestly: what kind of variable it is, where its center lies, how much it spreads, and which probability distribution could have produced it. Get those four right and the choice of test in @sec-stats-inference is usually obvious. Get them wrong and no amount of computation rescues the result.
+
+## Why bioinformatics needs statistics
+
+Statistics is how you separate a signal from the noise that every measurement carries. In bioinformatics that noise comes from three places at once.
+
+- **Biological variation**: two people, two cells, or two replicates differ even under the same conditions.
+- **Technical variation**: sequencing errors, batch effects, array intensities, sample handling.
+- **Scale**: a GWAS tests millions of variants and an RNA-seq study tests 20,000 genes. Rare flukes become certainties when you look often enough.
+
+Statistics gives you tools for each: descriptive summaries to see the data, probability models to describe the noise, and inference to decide what is real. Methods like PCA and clustering, used throughout @sec-structure and in transcriptomics, are also statistical tools for seeing structure in high-dimensional data.
+
+## Data types and measurement levels
+
+The type of a variable decides which summaries and tests are allowed. Check it before anything else.
+
+| Level | Properties | Genetics examples | Center and spread | Typical methods |
+| --- | --- | --- | --- | --- |
+| Nominal | Categories, no order | Case/control, blood type, nucleotide, ancestry label | Mode, counts | Chi-square, Fisher's exact, logistic regression |
+| Ordinal | Ordered, unequal gaps | Tumor stage, symptom severity, hearing-loss grade | Median, IQR | Spearman, Mann–Whitney, ordinal regression |
+| Interval | Equal gaps, no true zero | Temperature in °C, z-scores | Mean, SD | Pearson, t-test, linear regression |
+| Ratio | Equal gaps, true zero | Height, enzyme activity, read counts, LDL level | Mean, SD, CV, fold change | All of the above, plus ratios and log scales |
+
+Two refinements matter in practice:
+
+- **Discrete versus continuous.** Read counts and variant counts are whole numbers, so they need count models (Poisson, negative binomial) rather than the normal distribution.
+- **Genotypes are special.** A genotype coded 0/1/2 (@sec-biology) is a count of alleles. The standard additive model treats it as a number, which assumes each extra allele adds the same effect. A genotypic model treats the three values as categories instead.
+
+Beyond these levels, biological data also comes in characteristic shapes: **sequence data** (DNA, RNA, protein strings, analyzed by alignment and motif finding), **structural data** (3D coordinates of molecules), and **functional data** (expression, abundance, and activity measurements, analyzed with the statistics in this chapter).
+
+## Central tendency: where the data sits
+
+The mean is the default summary, but the median is safer for skewed biological data.
+
+- **Mean**: $\bar{x} = \frac{1}{n}\sum x_i$. Efficient and the basis of most tests, but pulled by outliers.
+- **Median**: the middle value of the sorted data. Robust to outliers and skew.
+- **Mode**: the most frequent value. Useful for categories and discrete counts.
+
+A worked example: a gene's expression in six samples is 5, 6, 6, 7, 8, and 120 TPM. The mean is 25.3, the median 6.5, and the mode 6. One sample, perhaps a contaminated one, has more than tripled the mean while the median barely moved.
+
+Expression levels, biomarker concentrations, and read depths are usually right-skewed. A log transform, such as $\log_2(x + 1)$ for counts, often makes them roughly symmetric, so that the mean becomes a fair summary again.
+
+## Variability: how much the data spreads
+
+A center without a spread is half a description. Report both.
+
+| Measure | Formula or definition | Strength | Weakness |
+| --- | --- | --- | --- |
+| Range | max − min | Simple | Determined by two extreme points |
+| Variance | $s^2 = \frac{1}{n-1}\sum (x_i - \bar{x})^2$ | Additive, used in models | Squared units |
+| Standard deviation (SD) | $s = \sqrt{s^2}$ | Same units as the data | Sensitive to outliers |
+| Interquartile range (IQR) | Q3 − Q1 | Robust, pairs with the median | Ignores the tails |
+| Coefficient of variation (CV) | $s / \bar{x}$ | Compares spread across scales | Only for ratio data with positive mean |
+
+The **standard deviation** describes how spread out individual observations are. The **standard error** (SE) describes how precisely you have estimated a quantity such as a mean: $\text{SE} = s/\sqrt{n}$. SD stays roughly constant as you add samples; SE shrinks.
+
+::: {.callout-warning title="Pitfall"}
+Error bars labeled only "±" are uninterpretable. SD shows the spread of the data; SE shows the precision of the mean and can be made arbitrarily small with a large sample. Always state which one you plot, and never use SE to make variable data look tidy.
+:::
+
+## Probability: the language of uncertainty
+
+A probability is a number from 0 (impossible) to 1 (certain). A handful of rules covers almost everything you need.
+
+| Rule | Formula | Applies when |
+| --- | --- | --- |
+| Complement | $P(\text{not } A) = 1 - P(A)$ | Always |
+| Addition | $P(A \text{ or } B) = P(A) + P(B) - P(A \text{ and } B)$ | Always; drop the last term if $A$ and $B$ are mutually exclusive |
+| Multiplication | $P(A \text{ and } B) = P(A)\,P(B)$ | $A$ and $B$ are independent |
+| Conditional | $P(A \mid B) = P(A \text{ and } B) / P(B)$ | Always |
+| Bayes' theorem | $P(A \mid B) = P(B \mid A)\,P(A) / P(B)$ | Updating a probability with new evidence |
+
+Genetics offers clean worked examples, using a recessive condition and two carrier parents (Aa × Aa):
+
+- Each child is affected (aa) with probability $\frac{1}{2} \cdot \frac{1}{2} = \frac{1}{4}$, because the allele from each parent is an independent draw.
+- Each child is a carrier with probability $\frac{1}{4} + \frac{1}{4} = \frac{1}{2}$: the two mutually exclusive routes Aa and aA are added.
+- With two children, the chance that at least one is affected is $1 - (3/4)^2 = 7/16$, using the complement.
+- If a child is known to be unaffected, the chance that this child is a carrier is $\frac{1/2}{3/4} = \frac{2}{3}$. That is conditioning: knowing "unaffected" removes the aa outcome.
+
+Independence is an assumption, not a fact. Alleles at nearby sites are *not* independent because of linkage disequilibrium (@sec-variation), and samples from relatives are not independent either (@sec-structure).
+
+## Distributions you will meet
+
+A probability distribution is a model of how a quantity varies. Five cover most of genetic and genomic data.
+
+| Distribution | Models | Parameters | Mean, variance | Where you see it |
+| --- | --- | --- | --- | --- |
+| Normal | Continuous, symmetric values | $\mu$, $\sigma$ | $\mu$, $\sigma^2$ | Quantitative traits, regression residuals, effect estimates |
+| Binomial | Successes in $n$ independent trials | $n$, $p$ | $np$, $np(1-p)$ | Alt reads at a site, allele counts, carriers in a sample |
+| Poisson | Counts of rare, independent events | $\lambda$ | $\lambda$, $\lambda$ | Sequencing coverage, de novo mutations per genome |
+| Negative binomial | Overdispersed counts | $\mu$, dispersion $\phi$ | $\mu$, $\mu + \phi\mu^2$ | RNA-seq read counts per gene |
+| Chi-square | Sum of $k$ squared standard normals | $k$ (degrees of freedom) | $k$, $2k$ | HWE tests, allelic tests, GWAS test statistics |
+
+Each comes with a typical calculation:
+
+- **Normal.** Many traits that depend on many genes and on the environment, such as height or LDL cholesterol, are close to normal. About 95% of values lie within $\mu \pm 1.96\sigma$. Many GWAS pipelines rank-based inverse-normal transform skewed traits to meet this shape.
+- **Binomial.** At a true heterozygous site with 30 reads, the number of ALT reads is Binomial(30, 0.5). Seeing 5 or fewer ALT reads has probability $1.6 \times 10^{-4}$, so such a call deserves suspicion.
+- **Poisson.** If reads land at random with mean depth $c$, the fraction of bases with zero coverage is about $e^{-c}$ (the Lander–Waterman model). At 3× it is 5%; at 30× it is negligible, though real coverage is less even than this.
+- **Negative binomial.** In RNA-seq, biological replicates vary more than Poisson allows: the variance exceeds the mean. DESeq2 and edgeR model counts with the negative binomial for this reason (Love, Huber and Anders, 2014, *Genome Biology*; Robinson, McCarthy and Smyth, 2010, *Bioinformatics*).
+- **Chi-square.** A GWAS z-statistic squared follows a chi-square with 1 degree of freedom under the null. Its median is 0.455, which is the basis of the genomic inflation factor $\lambda$ in @sec-gwas.
+
+::: {.callout-tip title="In practice"}
+Before choosing a model for counts, compare the mean and the variance across replicates. If the variance is close to the mean, Poisson may do. If it is clearly larger, which is the usual case in biology, use a negative binomial or a quasi-likelihood model.
+:::
+
+## Two theorems that make inference possible
+
+Two results from probability theory justify almost every test in this book.
+
+The **law of large numbers** (LLN) says that the sample average converges to the true mean as the sample grows. That is why a biobank of 100,000 people estimates an allele frequency far better than a study of 100.
+
+The **central limit theorem** (CLT) says that the average of many independent values is approximately normal, whatever the shape of the original distribution, with standard error $\sigma/\sqrt{n}$. The data does not need to be normal; the *estimate* does.
+
+```{mermaid}
+flowchart LR
+    P["Population<br/>any shape"] --> S1["Sample 1<br/>mean 1"]
+    P --> S2["Sample 2<br/>mean 2"]
+    P --> S3["Sample k<br/>mean k"]
+    S1 --> D["Sampling distribution<br/>of the mean"]
+    S2 --> D
+    S3 --> D
+    D --> N["Approximately normal<br/>center = true mean<br/>spread = SE"]
+```
+
+The CLT is why regression coefficients, log odds ratios, and allele-frequency estimates are treated as normal, and why a z-score $\hat\beta / \text{SE}$ leads to a p-value. It works poorly in small samples and for very rare events. A variant carried by five cases is exactly where normal approximations break down, which motivates the saddlepoint and Firth corrections of @sec-saige.
+
+You can watch the CLT happen in a few lines of R:
+
+```r
+set.seed(1)
+# A strongly skewed "expression" distribution
+draw <- function(n) mean(rexp(n, rate = 1/10))
+means_n5  <- replicate(10000, draw(5))
+means_n50 <- replicate(10000, draw(50))
+c(sd_n5 = sd(means_n5), sd_n50 = sd(means_n50))   # about 10/sqrt(5) and 10/sqrt(50)
+hist(means_n50, breaks = 50)                       # close to a bell curve
+```
+
+The same idea, run in reverse on your own data, is the **bootstrap**: resample the observations with replacement many times, recompute the statistic, and use the spread of those values as its uncertainty. It is handy when no formula for the SE exists.
+
+::: {.callout-note title="Try it"}
+In R, simulate RNA-seq-like counts for one gene in 10 replicates with `rpois(10, 100)` and with `rnbinom(10, mu = 100, size = 5)`. Compute the mean and variance of each, repeat 1,000 times, and plot the variances. Then explain in one sentence why a Poisson model would produce too many false positives for differential expression.
+:::

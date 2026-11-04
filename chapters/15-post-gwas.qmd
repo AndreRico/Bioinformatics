@@ -1,0 +1,133 @@
+# After the GWAS: annotation and interpretation {#sec-postgwas}
+
+A significant variant is a starting point, not an answer: it marks a region, and the causal variant and gene are usually still unknown. Turn the hits into a list of independent loci, annotate them, and bring in expression and biological knowledge to rank candidate genes. Then write up what the evidence supports, and no more.
+
+## From hits to loci
+
+Hundreds of significant variants usually come from a handful of signals. Neighboring variants are correlated through LD (@sec-variation), so one causal variant drags its neighbors above the threshold. The first job is to reduce them to independent **lead variants** and define a **locus** around each.
+
+```{mermaid}
+flowchart LR
+    S["Summary<br/>statistics"] --> C["Clump<br/>lead variants"]
+    C --> L["Define loci<br/>merge windows"]
+    L --> A["Annotate<br/>VEP, ANNOVAR"]
+    L --> Q["eQTL and<br/>colocalization"]
+    L --> FM["Fine-mapping<br/>credible sets"]
+    A --> G["Prioritize genes"]
+    Q --> G
+    FM --> G
+    G --> K["Knowledge<br/>integration"]
+    K --> W["Write-up"]
+```
+
+**Clumping** groups variants around the most significant one, using LD from a reference panel that matches your study's ancestry (for example, 1000 Genomes European samples for a European-ancestry GWAS):
+
+```bash
+plink --bfile ref/1kg_eur \
+      --clump results/gwas_harmonized.tsv \
+      --clump-snp-field ID --clump-field P \
+      --clump-p1 5e-8 --clump-p2 1e-5 \
+      --clump-r2 0.1 --clump-kb 500 \
+      --out loci/clumped
+```
+
+- `--clump-p1`: a lead variant must pass this threshold.
+- `--clump-p2`: secondary variants with p below this join the lead's clump.
+- `--clump-r2` and `--clump-kb`: variants within 500 kb with $r^2 > 0.1$ to the lead are assigned to it.
+
+The output, `loci/clumped.clumped`, has one row per lead variant. PLINK 2 has the same function with `--clump` and `--clump-id-field`, `--clump-p-field`.
+
+Then merge leads whose windows (for example, ±500 kb) overlap into one locus. Clumping is approximate: a locus can hold two independent signals in weak LD. Conditional analysis with GCTA-COJO (Yang et al., 2012, *Nature Genetics*) tests for secondary signals using summary statistics and reference LD.
+
+::: {.callout-warning title="Pitfall"}
+LD from a mismatched reference panel gives wrong clumps and wrong fine-mapping. Use a reference of the same ancestry, in the same genome build, with alleles aligned to your summary statistics. For multi-ancestry results, clump within each ancestry or use the largest group's LD and say so.
+:::
+
+## Variant annotation
+
+**Variant annotation** describes where each variant sits and what it is predicted to do. The two standard tools are the Ensembl **Variant Effect Predictor** (VEP; McLaren et al., 2016, *Genome Biology*) and **ANNOVAR** (Wang, Li and Hakonarson, 2010, *Nucleic Acids Research*).
+
+```bash
+vep --input_file loci/leads.vcf --output_file loci/leads_vep.txt --tab \
+    --cache --offline --assembly GRCh38 \
+    --symbol --canonical --biotype --sift b --polyphen b --force_overwrite
+
+table_annovar.pl loci/leads.avinput humandb/ -buildver hg38 -out loci/leads_anno \
+    -remove -protocol refGene,cytoBand -operation g,r -nastring .
+```
+
+Use the same build in the annotation as in your results. VEP reports a **consequence** per transcript and groups consequences by predicted impact:
+
+| Impact | Example consequences | Typical reading |
+| --- | --- | --- |
+| HIGH | stop_gained, frameshift_variant, splice_donor_variant, splice_acceptor_variant, start_lost | Likely disrupts the protein (pLOF; @sec-rare) |
+| MODERATE | missense_variant, inframe_insertion, inframe_deletion | May change protein function |
+| LOW | synonymous_variant, splice_region_variant | Unlikely to change the protein |
+| MODIFIER | intron_variant, upstream_gene_variant, 3_prime_UTR_variant, intergenic_variant | Non-coding; effect, if any, is regulatory |
+
+Most GWAS lead variants are MODIFIER: intronic or intergenic. A coding lead is good news but not proof. It may only be in LD with the causal variant. Look at all variants in the credible set (see fine-mapping below), not just the lead.
+
+## eQTLs and colocalization
+
+An **expression quantitative trait locus** (eQTL) is a variant associated with the expression level of a gene. A **cis-eQTL** affects a nearby gene, usually within 1 Mb. A **trans-eQTL** affects a distant gene, often on another chromosome. Because most GWAS hits are non-coding, eQTLs are the most common bridge from a variant to a gene.
+
+The **GTEx** project (GTEx Consortium, 2020, *Science*; https://gtexportal.org) maps eQTLs in about 50 human tissues. The eQTL Catalogue gathers uniformly processed results from many other studies. eQTL studies call significance per gene with permutations and a false discovery rate, not with the GWAS 5 × 10⁻⁸ threshold.
+
+Overlap is not enough. A GWAS hit and an eQTL in the same region may be driven by two different variants that happen to be in LD. **Colocalization** asks whether one shared causal variant explains both. The `coloc` method (Giambartolomei et al., 2014, *PLoS Genetics*) gives posterior probabilities for five hypotheses: no signal (H0), trait-only signal (H1), expression-only signal (H2), two distinct causal variants (H3), or one shared variant (H4).
+
+```r
+library(coloc)
+res <- coloc.abf(
+  dataset1 = list(beta = gwas$beta, varbeta = gwas$se^2, snp = gwas$id,
+                  type = "cc", N = 50000, s = 0.2, MAF = gwas$maf),
+  dataset2 = list(beta = eqtl$beta, varbeta = eqtl$se^2, snp = eqtl$id,
+                  type = "quant", N = 700, MAF = eqtl$maf)
+)
+res$summary   # PP.H4.abf near 1 supports a shared causal variant
+```
+
+A posterior for H4 above 0.8 is the usual bar. Use the tissue relevant to the trait: a colocalization in an unrelated tissue is weak evidence.
+
+## Fine-mapping, briefly
+
+**Fine-mapping** estimates, for each variant in a locus, the probability that it is causal. The output is a **credible set**: the smallest set of variants that contains the causal one with, say, 95% probability. SuSiE (Wang et al., 2020, *Journal of the Royal Statistical Society B*) and FINEMAP (Benner et al., 2016, *Bioinformatics*) work from summary statistics plus an LD matrix, and allow several causal variants per locus.
+
+Fine-mapping needs LD that matches the GWAS sample closely, ideally computed in-sample. A small credible set with a coding or regulatory variant is strong evidence. A credible set of 200 variants says the data cannot yet tell them apart.
+
+## Genes, pathways, and biological knowledge
+
+Ranking candidate genes at a locus combines several lines of evidence:
+
+| Evidence | Points to |
+| --- | --- |
+| Coding variant in the credible set | The gene it changes |
+| Colocalized eQTL in a relevant tissue | The regulated gene |
+| Chromatin interaction (Hi-C, promoter capture) | Genes contacting the variant's enhancer |
+| Nearest gene | A reasonable default, right in many but not most cases |
+| Known biology, model organisms, rare-variant evidence | Genes already linked to the trait (@sec-rare) |
+
+Gene- and pathway-level tests such as MAGMA (de Leeuw et al., 2015, *PLoS Computational Biology*) aggregate GWAS signal across genes and gene sets. Web platforms such as FUMA (Watanabe et al., 2017, *Nature Communications*) run clumping, annotation, eQTL lookup, and MAGMA in one place.
+
+**Biofilter**, a public tool from the Ritchie lab (Bush et al., 2009, *Pacific Symposium on Biocomputing*; Pendergrass et al., 2013, *BioData Mining*), integrates biological knowledge for this step. Its knowledge base, LOKI, collects genes, pathways, protein interactions, and ontologies from public sources such as Entrez Gene, Gene Ontology, KEGG, Reactome, and BioGRID. You can use it to annotate variants with genes and pathways, filter results to biologically supported regions, and build gene–gene models that have prior support. Knowledge graphs take the same idea further (@sec-kg).
+
+::: {.callout-tip title="In practice"}
+For each locus, build a one-row summary: lead variant, credible-set size, coding variants, colocalized genes and tissues, nearest gene, and known biology. Ranking genes from that table is faster and more honest than arguing for a favorite gene from one line of evidence.
+:::
+
+## PheWAS, briefly
+
+A **phenome-wide association study** (PheWAS) reverses the GWAS question: it takes one variant and tests it against hundreds of phenotypes (Denny et al., 2010, *Bioinformatics*). In electronic health records, diagnoses are grouped into **phecodes**. PheWAS shows **pleiotropy** (one variant, several traits) and possible side effects of targeting a gene. Correct for the number of phenotypes, with Bonferroni or FDR. Biobanks with linked records are the natural setting (@sec-biobanks).
+
+## Writing up the findings
+
+Say what the data show, at the level the evidence supports:
+
+- **Association** is the result: "variant X is associated with trait Y (OR 1.12, 95% CI 1.08–1.16, p = 3 × 10⁻¹⁰)".
+- **Mapping** to a gene is an inference: say which evidence supports it (coding, colocalization, fine-mapping).
+- **Mechanism** needs experiments: write "may act through", not "causes", without functional data.
+
+Include a table of loci with lead variant, alleles, frequency, effect, p-value, and candidate genes with the evidence for each. Add regional plots (LocusZoom-style) for the main loci. Report replication or meta-analysis status (@sec-meta), and deposit summary statistics in the GWAS Catalog. The checklist in @sec-templates lists the rest.
+
+::: {.callout-note title="Try it"}
+Take public GWAS summary statistics for a trait from the GWAS Catalog. Clump them with 1000 Genomes European samples, annotate the lead variants with the Ensembl VEP web interface, and look up each lead in the GTEx portal. For three loci, write one sentence each naming the candidate gene and the evidence behind it.
+:::

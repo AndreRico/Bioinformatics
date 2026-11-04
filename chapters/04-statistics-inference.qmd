@@ -1,0 +1,202 @@
+# Statistics II: from sample to population {#sec-stats-inference}
+
+You never see the population, only a sample of it, so every genetic finding is an estimate with an uncertainty and a risk of being wrong. A credible result needs four things: a sample that represents the question, an effect size with its standard error, a p-value judged against the number of tests you ran, and a model that adjusts for the obvious confounders. This chapter gives you the tools to check all four, in your own work and in papers you read.
+
+## Sampling and bias
+
+How the sample was collected limits what any later statistics can claim. A biased sample stays biased at any size.
+
+| Design | How units are chosen | Strength | Watch out for |
+| --- | --- | --- | --- |
+| Simple random | Every unit has the same chance | Unbiased in principle | Rarely possible with people |
+| Stratified | Random within predefined groups (ancestry, sex, site) | Guarantees each group is represented | Need weights to estimate population values |
+| Cluster | Whole groups (families, clinics, towns) | Practical and cheap | Units in a cluster are correlated |
+| Case–control | Cases and controls recruited separately | Efficient for rare diseases | Controls must come from the same source population |
+| Convenience, or healthcare-based | Whoever consents in a clinic or biobank | Large and cheap | Selection bias; not the general population |
+
+Large biobanks (@sec-biobanks) are mostly healthcare-based convenience samples. They are excellent for association studies but are not random samples of a country.
+
+The biases that most often fool genetic studies are these:
+
+- **Selection bias**: who enters the study depends on the outcome or on the exposure. Volunteers tend to be healthier and wealthier than average.
+- **Ascertainment bias**: how cases are found depends on access to care or testing. Electronic-record phenotypes inherit the habits of the clinics that recorded them.
+- **Batch effects**: cases genotyped or sequenced on a different plate, platform, or date than controls. Technical differences then look like associations.
+- **Confounding by ancestry** (population stratification): if allele frequencies and disease rates both differ between ancestry groups, any variant that differs in frequency appears associated. This is handled with principal components and mixed models (@sec-structure).
+
+```{mermaid}
+flowchart LR
+    A["Ancestry"] --> G["Genotype"]
+    A --> Y["Disease risk<br/>or diagnosis"]
+    G -. "association tested" .-> Y
+    B["Batch or platform"] --> G
+    B --> Y
+```
+
+Both ancestry and batch are **confounders**: they open a path between genotype and outcome that has nothing to do with biology. Including them as covariates, or designing them out, closes that path.
+
+Diverse recruitment matters for the same reason. Most GWAS participants so far have been of European ancestry, which limits how well findings, LD references, and risk scores transfer to other groups.
+
+## Estimation and confidence intervals
+
+An estimate without its uncertainty is not a result. Report a point estimate with its **standard error** (SE) or a **confidence interval** (CI).
+
+For an approximately normal estimate, the 95% CI is
+
+$$\hat\theta \pm 1.96 \times \text{SE}(\hat\theta)$$
+
+A worked example: a sample of 500 people has an allele frequency $\hat p = 0.20$. There are $2n = 1000$ alleles, so $\text{SE} = \sqrt{0.2 \times 0.8 / 1000} \approx 0.0126$. The 95% CI is 0.175 to 0.225. Quadruple the sample and the interval halves.
+
+Read a CI correctly. "95%" describes the procedure: if you repeated the study many times, 95% of the intervals built this way would contain the true value. It does not mean there is a 95% chance that this particular interval contains it, although that loose reading rarely misleads in practice. A CI that excludes the null value (0 for a beta, 1 for an odds ratio) corresponds to $p < 0.05$.
+
+When no formula for the SE exists, the **bootstrap** (@sec-stats-describe) gives one: resample individuals with replacement, recompute the estimate, and take the spread.
+
+## Hypothesis testing
+
+A hypothesis test asks one question: if there were no effect, how surprising would data like mine be? The steps are always the same.
+
+1. State the **null hypothesis** $H_0$ (no association, no difference) and the alternative $H_1$.
+2. Choose a test that fits the data type and design.
+3. Fix the significance level $\alpha$ before looking, for example 0.05, or $5 \times 10^{-8}$ for a GWAS.
+4. Compute the **test statistic** and its **p-value**.
+5. If $p < \alpha$, reject $H_0$. Otherwise, you *fail to reject* it; you have not shown it is true.
+
+| Question | Data | Parametric test | Non-parametric alternative |
+| --- | --- | --- | --- |
+| Two group means | Continuous | Welch's t-test | Mann–Whitney U |
+| Paired measurements | Continuous | Paired t-test | Wilcoxon signed-rank |
+| Three or more groups | Continuous | ANOVA | Kruskal–Wallis |
+| Two categorical variables | Counts | Chi-square test | Fisher's exact test (small counts) |
+| Outcome with several predictors | Continuous or binary | Linear or logistic regression | — |
+
+The **p-value** is the probability, assuming $H_0$ is true, of a statistic at least as extreme as the one observed. It is *not* the probability that $H_0$ is true, nor the probability that the result is a fluke, and it says nothing about how large the effect is.
+
+Two kinds of error are possible:
+
+| | $H_0$ true | $H_0$ false |
+| --- | --- | --- |
+| Reject $H_0$ | **Type I error** (false positive), rate $\alpha$ | Correct: true positive |
+| Do not reject | Correct: true negative | **Type II error** (false negative), rate $\beta$ |
+
+**Power** is $1 - \beta$, the chance of detecting a real effect. It rises with sample size, effect size, and, for genetic variants, allele frequency, and it falls as $\alpha$ gets stricter.
+
+A worked GWAS power estimate for a quantitative trait (standardized to SD 1): a SNP with MAF $p$ and per-allele effect $\beta$ explains $q^2 = 2p(1-p)\beta^2$ of the variance. For 80% power at $\alpha = 5 \times 10^{-8}$ you need $N q^2 \approx (5.45 + 0.84)^2 \approx 40$. With MAF 0.2 and $\beta = 0.05$ SD, $q^2 = 0.0008$, so you need about 50,000 people. This is why modern GWAS are so large.
+
+## Multiple testing
+
+Test enough hypotheses and some will pass $\alpha$ by chance. With one million independent tests at $\alpha = 0.05$, you expect 50,000 false positives. Every genome-scale analysis must correct for this.
+
+There are two families of correction, controlling different error rates:
+
+| Approach | Controls | Rule | Use when |
+| --- | --- | --- | --- |
+| Bonferroni | Family-wise error rate (FWER): chance of *any* false positive | Reject if $p < \alpha / m$ | Few tests, or every hit must be solid |
+| Holm | FWER | Step-down version of Bonferroni; never less powerful | Same as Bonferroni |
+| Benjamini–Hochberg (BH) | False discovery rate (FDR): expected share of false positives *among hits* | Sort p-values; reject the largest $k$ with $p_{(k)} \le k\alpha/m$, and all smaller ones | RNA-seq, PheWAS, screens that feed follow-up |
+| q-value | FDR, estimating the share of true nulls | Storey and Tibshirani, 2003, *PNAS* | As BH, often slightly more powerful |
+
+A worked comparison with $m = 10$ tests at 0.05. The sorted p-values are 0.001, 0.004, 0.012, 0.019, 0.030, 0.041, 0.20, 0.45, 0.62, 0.88. Bonferroni's threshold is 0.005, so 2 tests pass. BH compares each $p_{(k)}$ with $0.005k$: 0.001, 0.004, 0.012 ≤ 0.015, and 0.019 ≤ 0.020 pass, while 0.030 > 0.025 fails. BH declares 4 discoveries.
+
+```r
+p <- c(0.001, 0.004, 0.012, 0.019, 0.030, 0.041, 0.20, 0.45, 0.62, 0.88)
+sum(p.adjust(p, "bonferroni") < 0.05)   # 2
+sum(p.adjust(p, "BH") < 0.05)           # 4
+```
+
+### Where $5 \times 10^{-8}$ comes from
+
+The standard genome-wide significance threshold is a Bonferroni correction for about one million independent tests: $0.05 / 10^6 = 5 \times 10^{-8}$. Variants are not independent because of LD (@sec-variation), so the number of *effective* tests across common variants in European-ancestry genomes was estimated at roughly one million (Risch and Merikangas, 1996, *Science*; Pe'er et al., 2008, *Genetic Epidemiology*; Dudbridge and Gusnanto, 2008, *Genetic Epidemiology*). The threshold controls the FWER for one trait at about 5%.
+
+Keep its limits in mind:
+
+- It was derived for **common variants**. Including rare variants from sequencing increases the number of effective tests, and stricter thresholds have been proposed for whole-genome sequencing, on the order of $5 \times 10^{-9}$ (Pulit, de With and de Bakker, 2017, *Genetic Epidemiology*).
+- Populations with shorter LD, especially of African ancestry, carry more independent tests and may warrant a stricter threshold.
+- It applies **per trait**. Testing many phenotypes, as in a PheWAS, needs an extra correction across traits, often FDR.
+- **Gene-based tests** of about 20,000 genes typically use $0.05 / 20{,}000 = 2.5 \times 10^{-6}$ (@sec-rare).
+- $p < 1 \times 10^{-5}$ is sometimes reported as "suggestive". It is a flag for follow-up, not a finding.
+
+```{mermaid}
+flowchart TD
+    Q{"What are you testing?"} --> G["Common variants<br/>genome-wide"]
+    Q --> R["Genes, rare-variant<br/>aggregates"]
+    Q --> M["Many genes or traits<br/>for follow-up"]
+    G --> T1["p below 5e-8"]
+    R --> T2["Bonferroni over genes<br/>about 2.5e-6"]
+    M --> T3["BH FDR, q below 0.05"]
+```
+
+::: {.callout-warning title="Pitfall"}
+Corrections only work if you count every test you ran. Trying several models, covariate sets, or phenotype definitions and reporting the best is multiple testing in disguise. Write the analysis plan first, and report how many tests stand behind each threshold.
+:::
+
+## Correlation
+
+Correlation measures how strongly two variables move together, from −1 to +1.
+
+- **Pearson's $r$** measures linear association and is sensitive to outliers.
+- **Spearman's $\rho$** is Pearson's $r$ on ranks. It captures any monotonic relationship and resists outliers, which suits skewed expression data.
+
+$r^2$ is the share of the variance in one variable that a linear function of the other explains. The LD measure $r^2$ in @sec-variation is exactly this, computed between allele counts at two SNPs. Correlation is symmetric and says nothing about cause: gene co-expression may reflect co-regulation, a shared cell type, or a batch effect.
+
+## Linear and logistic regression
+
+Regression is the workhorse of genetic association. Almost every GWAS fits one regression per variant.
+
+For a **quantitative trait**, linear regression models the outcome $y$ as a straight-line function of the genotype dosage $G$ and covariates $C$:
+
+$$y = \beta_0 + \beta_G G + \gamma_1 C_1 + \dots + \gamma_k C_k + \varepsilon$$
+
+$\beta_G$ is the average change in the trait per copy of the effect allele, holding the covariates fixed. The test of $H_0: \beta_G = 0$ uses $z = \hat\beta_G / \text{SE}$.
+
+For a **binary trait**, such as case versus control, logistic regression models the log-odds:
+
+$$\log \frac{P(y = 1)}{1 - P(y = 1)} = \beta_0 + \beta_G G + \gamma_1 C_1 + \dots$$
+
+Here $e^{\beta_G}$ is the **odds ratio** (OR) per copy of the effect allele. A worked example: $\hat\beta = 0.18$, SE = 0.03. Then OR = $e^{0.18} = 1.20$, the 95% CI is $e^{0.18 \pm 1.96 \times 0.03}$, which is 1.13 to 1.27, and $z = 6$ gives $p \approx 2 \times 10^{-9}$.
+
+```r
+# One variant, additive model, standard covariates
+fit_q <- lm(ldl ~ dosage + age + sex + PC1 + PC2 + PC3 + PC4 + PC5, data = d)
+fit_b <- glm(case ~ dosage + age + sex + PC1 + PC2 + PC3 + PC4 + PC5,
+             family = binomial, data = d)
+summary(fit_b)$coefficients["dosage", ]                    # beta, SE, z, p
+exp(coef(fit_b)["dosage"] + c(-1.96, 1.96) * sqrt(vcov(fit_b)["dosage", "dosage"]))
+```
+
+The usual covariates are age, sex, genetic principal components for ancestry (@sec-structure), and genotyping batch or array. Adjust for confounders, not for anything downstream of the genotype. Adjusting a trait for a heritable covariate, such as waist size for BMI, can create false associations (Aschard et al., 2015, *American Journal of Human Genetics*).
+
+Ordinary regression assumes independent samples and, in the logistic case, enough cases per genotype. Related individuals call for mixed models, and rare variants with unbalanced case–control ratios call for saddlepoint or Firth corrections. @sec-saige covers both.
+
+## Effect sizes: reading a results table
+
+A summary-statistics file reports the same few numbers for every variant. Know how they relate and you can check any table by hand.
+
+| Column | Meaning | Relation |
+| --- | --- | --- |
+| Effect allele (A1) | The allele whose count is $G$ | Defines the sign of everything below |
+| BETA | Trait units (or log-odds) per effect allele | $\text{OR} = e^{\text{BETA}}$ |
+| OR | Odds ratio per effect allele (binary traits) | $\text{BETA} = \ln(\text{OR})$ |
+| SE | Standard error of BETA | Width of the CI |
+| Z or T | Test statistic | $z = \text{BETA} / \text{SE}$ |
+| P | p-value | Two-sided, from $z$ |
+| Allele frequency | Of the effect allele | Needed for power and for harmonizing |
+
+Statistical significance is not size. With 500,000 people, an effect of 0.01 SD can reach $p < 5 \times 10^{-8}$ and still be biologically trivial. Report the effect and its CI alongside every p-value.
+
+::: {.callout-tip title="In practice"}
+Before using anyone's summary statistics, recompute $z = \text{BETA}/\text{SE}$ for a few rows and check that it matches the reported p-value. Then confirm which allele is the effect allele. Most meta-analysis errors (@sec-meta) are flipped alleles or ORs mistaken for betas.
+:::
+
+## What to learn next
+
+This chapter is the floor, not the ceiling. The methods in Part III build on four extensions:
+
+- **Linear mixed models**, which add a random effect for genetic relatedness (@sec-saige).
+- **Meta-analysis**, which combines estimates by inverse-variance weighting (@sec-meta).
+- **Bayesian methods**, behind fine-mapping posterior probabilities and colocalization (@sec-postgwas).
+- **Machine learning and high-dimensional statistics**, for risk prediction, clustering, and omics data with more features than samples.
+
+*An Introduction to Statistical Learning* (James, Witten, Hastie and Tibshirani; free at [statlearning.com](https://www.statlearning.com/)) and *Modern Statistics for Modern Biology* (Holmes and Huber, 2019) are good next books. For questions, [Biostars](https://www.biostars.org/) remains the most active bioinformatics forum. @sec-reading gives a fuller reading path.
+
+::: {.callout-note title="Try it"}
+In R, simulate 5,000 people with a dosage `G <- rbinom(5000, 2, 0.3)`, a covariate `age`, and a trait `y <- 0.1*G + 0.02*age + rnorm(5000)`. Fit `lm(y ~ G + age)` and check that the 95% CI for `G` contains 0.1. Then simulate 1,000 null SNPs unrelated to `y`, test each one, and count how many pass $p < 0.05$, Bonferroni, and BH. Compare the counts with what you expected.
+:::

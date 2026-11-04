@@ -1,0 +1,52 @@
+# Preface {.unnumbered}
+
+This book is a structured reference for the daily work of a bioinformatician in human genetics: the biology behind the data, the statistics behind the tests, the files and computers that hold everything, and the analyses that turn genotypes into findings. It grew out of years of working notes and is organized so that each chapter answers one practical question.
+
+Most good material on the subject is scattered across tool manuals, papers, and lab wikis. This book takes a different approach: **one path from foundations to results, with diagrams, commands, and checklists you can reuse**.
+
+## Who it is for
+
+- **People moving into bioinformatics** from biology, statistics, or software, who need the other two thirds.
+- **Analysts starting their first GWAS** on a biobank and wanting to know what comes before and after the association test.
+- **Researchers who read genetic papers** and want to understand what the QC, the Manhattan plot, and the meta-analysis really did.
+- **Students** who want to see how the pieces connect in practice.
+
+## How examples work
+
+Examples that need data use **public resources**: 1000 Genomes, public GWAS summary statistics, PharmGKB, and the tutorials published with each tool. Everything else is shown in isolation, with small, self-explanatory snippets. No example contains data, results, paths, or infrastructure details from a real private cohort ([ADR 0004](https://github.com/AndreRico/Bioinformatics/blob/main/adr/0004-public-data-examples.md)).
+
+Throughout the chapters, boxes like this one give practical advice from real analyses:
+
+::: {.callout-tip title="In practice"}
+Write down the genome build, the software versions, and every QC threshold before you start. Most "the results changed" mysteries are one of these three.
+:::
+
+Boxes like this one warn about common mistakes:
+
+::: {.callout-warning title="Pitfall"}
+Mixing GRCh37 and GRCh38 coordinates produces no error message. It produces wrong answers.
+:::
+
+And boxes like this one suggest a short exercise:
+
+::: {.callout-note title="Try it"}
+Pick the analysis you are working on and write, in one sentence, which step worries you most: the data, the QC, the model, or the interpretation. Start reading with the matching part.
+:::
+
+## How to read it
+
+**Part I — Foundations** covers the biology of the genome and the statistics you need to reason about it. **Part II — Data and Infrastructure** covers how data is produced, stored, and computed on. **Part III — Genetic Association Studies** follows a GWAS from raw genotypes to interpreted loci. **Part IV — Applications** covers pharmacogenomics and knowledge graphs. The **appendices** hold cheat sheets, templates, a reading path, and a glossary.
+
+```{mermaid}
+flowchart LR
+    F["Part I<br/>Foundations"] --> D["Part II<br/>Data and infrastructure"]
+    D --> G["Part III<br/>Association studies"]
+    G --> A["Part IV<br/>Applications"]
+    F -.-> A
+```
+
+On your first read, go in order. After that, use each chapter as a reference.
+
+## How to contribute
+
+Corrections and suggestions are welcome. Use Discussions to talk, issues for specific fixes, and PRs to propose text. The [contributing guide](https://github.com/AndreRico/Bioinformatics/blob/main/CONTRIBUTING.md) explains the flow.

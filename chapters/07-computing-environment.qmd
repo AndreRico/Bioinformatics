@@ -1,0 +1,233 @@
+# The computing environment: HPC, remote development, and cloud {#sec-computing}
+
+Genetic data is too large and too sensitive for a laptop, so your analyses run somewhere else: on a shared high-performance computing (HPC) cluster, in a big-data platform, or in a cloud workspace next to the data. Learn to submit and monitor batch jobs, keep your software environment reproducible, and edit code remotely. Then the location of the computer stops mattering.
+
+## Why a cluster
+
+You use a cluster for three reasons: the data does not fit on your machine, the work splits into many independent pieces, and the data is not allowed to leave a controlled environment. A GWAS on 500,000 people is 22 chromosomes, each split into chunks, each run as a separate job.
+
+A cluster has three kinds of parts:
+
+- **Login nodes**, where you connect by SSH, edit files, and submit jobs. They are shared by everyone, so never run heavy work there.
+- **Compute nodes**, where jobs actually run. You reach them only through the scheduler.
+- **A shared parallel file system** (GPFS, Lustre, or similar), mounted on every node, so a job sees the same files you do.
+
+```{mermaid}
+flowchart LR
+    U["Your laptop"] -->|"SSH or VPN"| L["Login node"]
+    L -->|"bsub or sbatch"| S["Scheduler"]
+    S --> C1["Compute node"]
+    S --> C2["Compute node"]
+    S --> C3["Compute node"]
+    L --- FS[("Shared file system")]
+    C1 --- FS
+    C2 --- FS
+    C3 --- FS
+```
+
+A **scheduler** decides which job runs where and when, based on what you request (cores, memory, time) and on fair-share policies. Many institutional clusters are federations: pools of nodes bought by different groups, each reached through its own **queue**. Which queues you may use depends on your group membership.
+
+## Submitting jobs with LSF
+
+IBM Spectrum LSF is common in academic medical centers; SLURM is the most common elsewhere. The ideas are identical. A job is a shell script plus a resource request.
+
+```bash
+#!/bin/bash
+#BSUB -J gwas_chr22                # job name
+#BSUB -q normal                    # queue
+#BSUB -n 4                         # cores
+#BSUB -R "rusage[mem=16000]"       # memory, in MB on most sites
+#BSUB -R "span[hosts=1]"           # all cores on one node
+#BSUB -W 8:00                      # wall time, hours:minutes
+#BSUB -o logs/%J.out               # stdout, %J = job ID
+#BSUB -e logs/%J.err               # stderr
+set -euo pipefail
+
+module load plink/2.0
+plink2 --pfile data/chr22 --glm --threads 4 --memory 14000 --out results/chr22
+```
+
+Submit it with `bsub < job.sh` (the `<` lets LSF read the `#BSUB` lines). Then monitor:
+
+```bash
+bjobs                       # your pending and running jobs
+bjobs -l 123456             # full detail: host, limits, reason pending
+bjobs -o "id stat queue exec_host"
+bpeek 123456                # stdout of a running job
+bhist -l 123456             # history after it finishes
+bkill 123456                # cancel
+bqueues                     # queues you can see and their limits
+bhosts                      # nodes and their load
+bsub -q interactive -Is bash    # an interactive shell on a compute node
+```
+
+Memory units in `rusage[mem=...]` depend on how the site configured LSF (MB is most common). Check your cluster's documentation and test with a small job first.
+
+**Array jobs** run the same script many times with a different index. They are the natural shape for per-chromosome work.
+
+```bash
+#BSUB -J "gwas[1-22]"
+#BSUB -o logs/%J_%I.out
+CHR=${LSB_JOBINDEX}
+plink2 --pfile data/chr${CHR} --glm --out results/chr${CHR}
+```
+
+Use `"gwas[1-22]%5"` to run at most five at a time, and `bkill "123456[7]"` to cancel one element.
+
+## SLURM equivalents
+
+If you move between clusters, this table covers most daily use.
+
+| Task | LSF | SLURM |
+| --- | --- | --- |
+| Submit a script | `bsub < job.sh` | `sbatch job.sh` |
+| Directive prefix | `#BSUB` | `#SBATCH` |
+| Queue / partition | `-q normal` | `-p normal` |
+| Cores | `-n 4` | `-c 4` (`--cpus-per-task`) |
+| Memory | `-R "rusage[mem=16000]"` | `--mem=16G` |
+| Wall time | `-W 8:00` | `-t 08:00:00` |
+| Job name | `-J name` | `-J name` |
+| Output log | `-o logs/%J.out` | `-o logs/%j.out` |
+| Array job | `-J "name[1-22]"`, `$LSB_JOBINDEX` | `--array=1-22`, `$SLURM_ARRAY_TASK_ID` |
+| List my jobs | `bjobs` | `squeue -u $USER` |
+| Job detail | `bjobs -l ID` | `scontrol show job ID` |
+| Finished job accounting | `bhist -l ID`, `bacct` | `sacct -j ID` |
+| Cancel | `bkill ID` | `scancel ID` |
+| Queues / partitions | `bqueues` | `sinfo` |
+| Interactive shell | `bsub -Is bash` | `srun --pty bash` |
+
+::: {.callout-tip title="In practice"}
+Size requests from a real run. Submit one chromosome, then read the peak memory and run time from `bjobs -l` or `sacct`. Request about 20–30% more than the peak. Over-asking makes you wait longer in the queue; under-asking gets the job killed near the end.
+:::
+
+## Software: modules, conda, and containers
+
+Use the lightest tool that pins your versions.
+
+- **Environment modules** (`module avail`, `module load R/4.3`, `module list`) give you centrally installed software. Load them inside the job script, not only in your login shell.
+- **Conda** or **mamba** environments install your own Python and R stacks without admin rights. Export them with `conda env export > environment.yml`, and point your package directories at project storage because home quotas are small.
+- **Containers** freeze the whole operating system layer. On HPC you run them with **Apptainer** (formerly Singularity), which runs as your user and can pull Docker images.
+
+```bash
+# TAG: pick an exact version tag from quay.io/biocontainers/bcftools
+apptainer pull bcftools.sif docker://quay.io/biocontainers/bcftools:TAG
+apptainer exec --bind $PWD bcftools.sif bcftools --version
+```
+
+Write a small `start.sh` in each project that loads modules and activates the environment, and `source` it at the top of every job script. One file then defines the environment for both you and your jobs.
+
+## Storage tiers
+
+Clusters have several file systems with different rules. Names vary; the roles do not.
+
+| Tier | Typical size | Backed up | Use for |
+| --- | --- | --- | --- |
+| Home | Small, tens of GB | Usually | Configuration, scripts, small environments |
+| Project or group | Large, tens to hundreds of TB | Often, or snapshots | Shared datasets, code, final results |
+| Scratch | Large, fast | No, purged on a schedule | Intermediate files you can regenerate |
+| Node-local scratch | Per node, fastest | No, deleted after the job | Heavy temporary I/O inside one job |
+
+Keep raw data read-only in a dedicated directory and never run analyses inside it. Write intermediates to scratch, then copy what you need to project space. Move files with `rsync -avP` or `scp`, and only data your access agreements allow off the cluster.
+
+::: {.callout-warning title="Pitfall"}
+Long interactive work on a login node, or a `for` loop that runs 22 chromosomes there, gets your processes killed and slows everyone else. Use an interactive job or a batch job. To survive a dropped connection, start `tmux` or `screen` first.
+:::
+
+## VS Code Remote-SSH
+
+The Remote-SSH extension runs VS Code's editor on your laptop and its server, terminal, and language tools on the cluster. You edit remote files as if they were local.
+
+First, create a key pair on your laptop and copy the public key to the cluster, if your site allows key authentication:
+
+```bash
+ssh-keygen -t ed25519 -C "laptop"
+ssh-copy-id -i ~/.ssh/id_ed25519.pub username@hpc-login.example.edu
+```
+
+Then describe the host in `~/.ssh/config`:
+
+```text
+Host hpc
+    HostName hpc-login.example.edu
+    User username
+    IdentityFile ~/.ssh/id_ed25519
+    ServerAliveInterval 60
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 4h
+```
+
+Now `ssh hpc` works in a terminal. In VS Code, install "Remote - SSH", run **Remote-SSH: Connect to Host...**, and pick `hpc`. Many institutions require a VPN first; some require two-factor authentication on every login, which `ControlMaster` reduces to once per session.
+
+```{mermaid}
+sequenceDiagram
+    participant V as VS Code on laptop
+    participant L as Login node
+    participant C as Compute node
+    V->>L: SSH using ~/.ssh/config
+    L-->>V: VS Code server starts in home
+    V->>L: Edit files, open terminal
+    L->>C: bsub or sbatch from the terminal
+    C-->>L: Results on shared file system
+```
+
+Install the Python, R, and Jupyter extensions on the remote side, select the interpreter from your conda environment, and keep `~/.vscode-server` from filling your home quota. For a Jupyter server on a compute node, start it with `jupyter lab --no-browser --port=8888` inside an interactive job, then forward the port: `ssh -N -L 8888:<node>:8888 hpc`.
+
+## Databricks and Spark for big tables
+
+Electronic health record (EHR) extracts are billions of rows: every diagnosis, lab, and medication for every patient. A data platform such as **Databricks** runs **Apache Spark** over tables stored in cloud object storage, so a query is split across many machines.
+
+You work in notebooks (SQL, Python, R) attached to a compute cluster. Tables live in a **catalog**, organized as `catalog.schema.table`, with permissions set per schema. The common pattern is to filter and aggregate in Spark, then hand a small result to pandas or R.
+
+```python
+from pyspark.sql import functions as F
+dx = spark.table("research.ehr.diagnoses")
+cases = (dx.filter(F.col("icd10_code").startswith("E11"))
+           .groupBy("person_id")
+           .agg(F.countDistinct("encounter_date").alias("n_dates"))
+           .filter("n_dates >= 2"))
+cases.toPandas().to_csv("t2d_cases.csv", index=False)  # only after aggregating
+```
+
+Avoid `.toPandas()` or `collect()` on large tables: it pulls everything into one machine's memory. Genotype-scale work fits better on the HPC cluster or on Hail.
+
+## Workflows and the cloud
+
+When a pipeline has many steps and must run the same way on hundreds of samples, write it in a workflow language. **WDL** (Workflow Description Language, <https://openwdl.org/>) describes **tasks** (a command with inputs, outputs, and a container) and a **workflow** that wires them together. **Cromwell** and **miniwdl** execute it locally, on HPC, or in the cloud. Nextflow and Snakemake fill the same role with different syntax.
+
+```text
+version 1.0
+task count_variants {
+  input { File vcf  String image }
+  command <<< bcftools view -H ~{vcf} | wc -l >>>
+  output { Int n = read_int(stdout()) }
+  runtime {
+    docker: image
+    memory: "2 GB"
+  }
+}
+workflow count {
+  input { Array[File] vcfs  String image }
+  scatter (v in vcfs) { call count_variants { input: vcf = v, image = image } }
+  output { Array[Int] counts = count_variants.n }
+}
+```
+
+The large genomic resources now keep data in the cloud and bring you to it, a model called a **trusted research environment** (@sec-biobanks).
+
+- **Terra**, developed by the Broad Institute with partners, runs WDL on Google Cloud, with notebooks. NHGRI's **AnVIL** and the All of Us Researcher Workbench are built on it.
+- **DNAnexus** runs the UK Biobank Research Analysis Platform, with apps, Spark, and Jupyter.
+
+In the cloud, files are objects addressed by full URLs (`gs://bucket/path/file.vcf.gz`, `s3://...`), not directories. A list of input files for a workflow must contain full paths. You pay for compute and storage by the hour, so stop idle notebooks and delete intermediates.
+
+```{mermaid}
+flowchart LR
+    D[("Controlled data<br/>in cloud storage")] --> W["Workspace<br/>notebooks + workflows"]
+    W --> R["Aggregate results"]
+    R -->|"review rules"| E["Export"]
+    W -.-x X["Individual-level data<br/>cannot leave"]
+```
+
+::: {.callout-note title="Try it"}
+Write an LSF array job (or SLURM, if that is what you have) that downloads the 1000 Genomes Phase 3 VCF for chromosomes 20, 21, and 22 and runs `bcftools stats` on each. Size it from a single test run, then rewrite the same logic as a WDL `scatter` and run it locally with `miniwdl run`.
+:::

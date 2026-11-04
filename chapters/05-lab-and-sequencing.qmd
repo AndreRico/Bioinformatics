@@ -1,0 +1,126 @@
+# From sample to data: lab and sequencing methods {#sec-lab}
+
+Every genotype you analyze was measured by a lab method with its own blind spots. Arrays are cheap and cover common variants; exome sequencing finds coding variants; whole-genome sequencing sees almost everything, at a price. Know which one produced your data, because it decides what you can find and which errors to expect.
+
+## Three ways to read a genome
+
+The choice of technology is a trade-off between cost per sample and how much of the genome you see. Large biobanks usually combine them: an array on everyone, sequencing on as many as the budget allows.
+
+| | Genotyping array | Whole-exome sequencing (WES) | Whole-genome sequencing (WGS) |
+| --- | --- | --- | --- |
+| What it reads | 0.5–2 million pre-chosen sites | Protein-coding exons, about 1–2% of the genome | Nearly the whole genome |
+| Typical depth | Not applicable (probe intensity) | 50–100× on targets | 30× |
+| Finds new variants | No, only sites on the chip | Yes, in targeted regions | Yes, genome-wide |
+| Rare variants | Poorly, unless on the chip | Coding rare variants well | Coding and non-coding |
+| Structural variants | Large CNVs only, from intensities | Limited | Better, still hard with short reads |
+| Relative cost | Lowest | Medium | Highest |
+| Main use | GWAS of common variants, PRS | Rare-variant burden tests (@sec-rare) | Everything, including non-coding |
+| Usual output | IDAT → PLINK/VCF | CRAM, gVCF, pVCF | CRAM, gVCF, pVCF |
+
+A **genotyping array** (or chip) carries probes for known variants. DNA hybridizes to the probes, and the color and intensity of a fluorescent signal tell the genotype. A clustering algorithm converts intensities into calls, so samples with poor DNA give noisy clusters and missing genotypes.
+
+**Sequencing** reads the DNA itself. **Whole-exome sequencing** first captures the exons with baits, then sequences them. **Whole-genome sequencing** skips the capture step. Because it has no capture bias, WGS also gives more even coverage of the exome than WES.
+
+::: {.callout-tip title="In practice"}
+When a biobank offers both array and sequencing data for the same people, use the array (plus imputation) for common-variant GWAS and the sequencing for rare variants. The array set is usually larger and easier to handle.
+:::
+
+## The NGS workflow
+
+Next-generation sequencing (NGS) turns a tube of DNA into a file of variant calls in five steps. Everything up to the reads happens in the lab; everything after is a bioinformatics pipeline.
+
+```{mermaid}
+flowchart LR
+    S["DNA sample"] --> L["Library prep<br/>fragment + adapters"]
+    L --> Q["Sequencing<br/>by synthesis"]
+    Q --> F["Reads<br/>FASTQ"]
+    F --> A["Alignment<br/>BAM or CRAM"]
+    A --> V["Variant calling<br/>gVCF"]
+    V --> J["Joint genotyping<br/>pVCF"]
+```
+
+1. **Library preparation.** DNA is sheared into fragments of a few hundred bases. Adapters are ligated to both ends so the fragments can bind to the flow cell. A short PCR step may amplify the library. For exomes, a capture step pulls down the target regions.
+2. **Sequencing.** On Illumina instruments, each fragment is copied into a cluster by bridge amplification. Then fluorescent, reversibly terminated nucleotides are added one cycle at a time, and a camera records which base each cluster incorporated (sequencing by synthesis). Most runs are **paired-end**: each fragment is read from both ends, typically 150 bases each.
+3. **Base calling and reads.** The instrument converts images into bases with a quality score per base. The output is FASTQ (@sec-formats).
+4. **Alignment.** An aligner such as BWA-MEM (Li, 2013, arXiv:1303.3997) places each read on the reference genome. Duplicate reads from PCR are marked, and the result is stored as BAM or CRAM.
+5. **Variant calling.** A caller compares the aligned reads with the reference at every position and decides the genotype. GATK HaplotypeCaller and DeepVariant are the common choices. Per-sample calls are written as gVCFs, then **jointly genotyped** across all samples into one multi-sample VCF.
+
+Other platforms work differently. Ion Torrent detects the pH change when a base is added. **Long-read** platforms, PacBio HiFi and Oxford Nanopore, read single molecules of 10,000 bases or more. They resolve structural variants, repeats, and phase far better than short reads, at a higher cost per base.
+
+::: {.callout-warning title="Pitfall"}
+Do not compare variant calls from different pipelines as if they were the same assay. Two cohorts called with different callers, versions, or references differ in ways that look like biology in an association test. Re-call from CRAMs, or at least harmonize and QC the sites jointly (@sec-qc).
+:::
+
+## Coverage and depth
+
+**Depth** is how many reads cover one position. **Coverage** is often used for the average depth across a target, and also for the fraction of the target covered at a minimum depth ("95% of the exome at ≥20×"). Report both.
+
+The expected average depth follows from simple arithmetic (Lander and Waterman, 1988, *Genomics*):
+
+$$
+C = \frac{N \times L}{G}
+$$
+
+where $N$ is the number of reads, $L$ the read length, and $G$ the size of the target. For a 3.1 billion base genome, 600 million read pairs of 2 × 150 bases give $C = 600 \times 10^6 \times 300 / 3.1 \times 10^9 \approx 58\times$ before duplicates and unmapped reads are removed.
+
+Depth matters because a heterozygous call needs to see both alleles. At 30× a heterozygote shows roughly 15 reads of each allele, enough to be confident. At 5×, by chance, you can easily see only one allele and miscall the person as homozygous.
+
+| Depth | What you can do |
+| --- | --- |
+| 1–5× (low-pass) | Population-level frequencies; genotypes only with imputation |
+| 20–30× | Reliable germline SNVs and short indels genome-wide |
+| 50–100× | Exome targets, after uneven capture is accounted for |
+| 100× and above | Somatic or mosaic variants at low allele fractions |
+
+Coverage is never uniform. GC-rich regions, segmental duplications, and low-complexity repeats get fewer reads or ambiguous alignments. Variant calls there deserve less trust, whatever the average depth says.
+
+## Sequencing QC at a glance
+
+A few summary numbers tell you whether a sequenced sample is usable before you look at any variant. Tools such as FastQC, `samtools stats`, Picard, and MultiQC report them.
+
+| Metric | What it checks | Typical expectation |
+| --- | --- | --- |
+| Base quality | Sequencer accuracy | Most bases at Q30 or above |
+| Mapping rate | Sample is human and uncontaminated | Above 95% of reads aligned |
+| Duplicate rate | Library complexity | A few percent to around 10% |
+| Mean depth and % at ≥20× | Enough reads everywhere | Meets the study target |
+| Insert size | Library fragment length | A clear peak, a few hundred bases |
+| Ti/Tv ratio of SNVs | Call quality | About 2.0–2.1 genome-wide; about 3 in exomes |
+| Contamination estimate | Sample mixture | Below about 2–3% |
+
+A sample that fails several of these at once usually has a lab problem, not a biological one. Sample-level and variant-level QC for analysis are covered in @sec-qc.
+
+## Imputation in one paragraph
+
+**Imputation** predicts genotypes at sites the array did not measure. It compares each person's measured haplotypes with a reference panel of sequenced haplotypes, such as 1000 Genomes or TOPMed, and fills the gaps from the best-matching stretches. A typical array of 700,000 sites becomes tens of millions of imputed variants, each with an imputation quality score (INFO or $R^2$). Imputed genotypes are probabilities, stored as dosages (@sec-formats). Rare variants and populations poorly represented in the panel impute badly. How to filter imputed data is covered in @sec-qc.
+
+## qPCR: measuring how much
+
+Quantitative PCR (qPCR) measures how much of a specific DNA or RNA sequence a sample contains. You will meet it as validation of sequencing results, as gene-expression measurements, and in older candidate-gene studies.
+
+PCR doubles a target sequence in each cycle of denaturation, primer annealing, and extension. In qPCR, a fluorescent reporter measures the product after every cycle. **SYBR Green** binds any double-stranded DNA. A **TaqMan probe** binds only the target and fluoresces when the polymerase cleaves it, which is more specific.
+
+The key number is the **Ct** (cycle threshold): the cycle at which fluorescence crosses a fixed threshold. More starting template means an earlier crossing, so **a lower Ct means more target**. With perfect efficiency, one cycle of difference is a twofold difference in starting amount.
+
+For relative gene expression, the standard **ΔΔCt method** (Livak and Schmittgen, 2001, *Methods*) normalizes twice: first to a reference gene in the same sample, then to a control condition.
+
+$$
+\Delta C_t = C_{t,\text{target}} - C_{t,\text{reference}}, \qquad
+\Delta\Delta C_t = \Delta C_{t,\text{treated}} - \Delta C_{t,\text{control}}, \qquad
+\text{fold change} = 2^{-\Delta\Delta C_t}
+$$
+
+A worked example:
+
+| Sample | Ct target | Ct reference | ΔCt |
+| --- | --- | --- | --- |
+| Control | 26.0 | 18.0 | 8.0 |
+| Treated | 24.0 | 18.2 | 5.8 |
+
+$\Delta\Delta C_t = 5.8 - 8.0 = -2.2$, so the fold change is $2^{2.2} \approx 4.6$. The target is about 4.6 times more expressed in the treated sample.
+
+The method assumes both assays amplify with near 100% efficiency (90–110% is the usual acceptable range, checked with a dilution series). Run technical replicates, include no-template controls to catch contamination, and choose a reference gene whose expression does not change between conditions.
+
+::: {.callout-note title="Try it"}
+Using the coverage formula, work out how many 2 × 150 bp read pairs you need for 30× average depth on a 3.1 Gb genome, and then for 100× on a 50 Mb exome target. Assume 20% of reads are lost to duplicates and off-target capture, and compare the two read counts.
+:::

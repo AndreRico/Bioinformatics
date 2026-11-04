@@ -1,0 +1,172 @@
+# Glossary {#sec-glossary}
+
+Terms are listed alphabetically. Each one is explained in context in the chapter where it first appears.
+
+| Term | Meaning |
+| --- | --- |
+| ACAT | Cauchy-based combination of correlated p-values |
+| Activity score | Sum of per-allele function values used to assign phenotype for genes such as CYP2D6, CYP2C9 and DPYD |
+| Additive model | Genotype coded 0/1/2, so each allele copy shifts the trait by β |
+| Allele | One version of the sequence at a variable site |
+| Alternative splicing | Joining a gene's exons in different combinations to make several isoforms |
+| Apache Spark | Distributed engine for processing large tables |
+| Apptainer (Singularity) | Container runtime designed for HPC |
+| Array job | One submission that runs the same script over many indices |
+| BAM / CRAM | Binary alignment format / reference-based compressed alignment format |
+| 0-based vs 1-based coordinates | Counting conventions: BED is 0-based half-open; VCF, GFF, SAM and PLINK .bim are 1-based |
+| Batch effect | Technical variation that tracks processing date, plate or platform |
+| Beta (β) | Effect size: trait change (or log-odds change) per copy of the effect allele |
+| BGEN | Compressed genotype-probability format used for imputed data |
+| Biobank | Consented cohort with genomic data linked to phenotypes |
+| Biofilter | Tool for integrating biological knowledge (pathways, interactions) into genetic analyses |
+| Bonferroni correction | Dividing α by the number of tests to control the family-wise error rate |
+| Burden test | Collapses variants into one score per person and tests it |
+| Call rate | Fraction of genotypes successfully called, per sample or per variant; missingness is one minus the call rate |
+| Central dogma | Information flows from DNA to RNA to protein |
+| Central limit theorem | Averages of many values are approximately normally distributed |
+| Cis / trans | Two variants on the same chromosome copy / on different copies |
+| Clumping | Grouping significant SNPs by LD to count independent loci |
+| CNV | Copy-number variant: a deletion or duplication that changes a region's copy number |
+| Cochran's Q / I² | Heterogeneity statistic / share of between-study variation due to heterogeneity |
+| Codon | Three bases that specify one amino acid or a stop signal |
+| Collider bias | False association created by adjusting for a consequence of the trait |
+| Colocalization | Testing whether one shared causal variant explains two signals (PP.H4) |
+| Compound heterozygosity | Two damaging variants in the same gene on different chromosome copies |
+| Confidence interval | Estimate ± 1.96 SE; a range produced by a procedure that covers the true value 95% of the time |
+| Confounder | A variable linked to both exposure and outcome that creates a spurious association |
+| Covariate | A variable adjusted for in a model, such as age, sex or principal components |
+| Coverage | Average depth over a target, or the fraction of the target above a minimum depth |
+| CPIC | Clinical Pharmacogenetics Implementation Consortium; writes gene–drug guidelines with evidence levels A–D |
+| Credible set | Smallest set of variants containing the causal one with a given probability |
+| Ct (cycle threshold) | The cycle at which fluorescence crosses a threshold; lower Ct means more template |
+| Cypher | Declarative, pattern-matching graph query language (Neo4j; basis of ISO GQL) |
+| Data Use Agreement (DUA) | Contract governing the use of a dataset |
+| Depth | Number of reads covering a position |
+| Diplotype | The pair of haplotypes (star alleles) a person carries for a gene, e.g., *1/*2 |
+| DNA methylation | A methyl group added to cytosine, mostly at CpG sites |
+| Dosage | The expected count of the coded allele from imputed genotype probabilities, from 0 to 2 |
+| Effect allele | The counted allele that defines the sign of a beta or odds ratio |
+| Effective sample size | 4 / (1/N_cases + 1/N_controls) for case–control studies |
+| EHR | Electronic health record |
+| Epigenetics | Changes in gene activity, maintained across cell divisions, without changes to the DNA sequence |
+| eQTL | Expression quantitative trait locus: a variant associated with a gene's expression level |
+| Extracellular vesicle (EV) | A membrane particle released by cells carrying proteins, lipids and RNA |
+| FASTQ | Text format holding reads with a per-base quality string |
+| FDR | False discovery rate: expected share of false positives among the hits (Benjamini–Hochberg) |
+| Fine-mapping | Assigning each variant in a locus a probability of being causal |
+| Firth regression | Penalized logistic regression that keeps estimates finite with rare events |
+| Fixed-effect model | Assumes one true effect shared by all studies |
+| Gene-based test | Test of a set of variants, usually within one gene |
+| Genetic relationship matrix (GRM) | Pairwise genetic similarity across all samples |
+| Genome build | The versioned reference sequence that coordinates refer to |
+| Genome-wide significance | P < 5×10⁻⁸, the conventional threshold for common-variant GWAS |
+| Genomic inflation factor (λ) | Median observed χ² divided by its expected value (0.4549) |
+| Genotype | The pair of alleles a diploid person carries at a site |
+| Genotyping array | Chip of probes that measures genotypes at pre-chosen known sites |
+| Graph RAG | Retrieval-augmented generation that grounds an LLM's answer in subgraphs retrieved from a knowledge graph |
+| GRCh37 / GRCh38 | The two human reference builds in common use, also called hg19 / hg38 |
+| Gremlin | Imperative traversal language of Apache TinkerPop |
+| GT / DS / GP | Genotype call / expected ALT allele dosage / genotype probabilities |
+| GTEx | EQTL resource covering about 50 human tissues |
+| gVCF | Per-sample VCF with reference-confidence blocks covering all positions |
+| GWAS | Genome-wide association study: testing variants across the genome for association with a trait |
+| Haplotype | The alleles on one physical chromosome across a region |
+| Hard call | A definite genotype (0, 1 or 2) rather than a probability |
+| Hardy–Weinberg equilibrium | Expected genotype frequencies p², 2pq, q² under random mating |
+| Harmonization | Aligning builds, IDs, alleles and strand across studies before combining |
+| Heterozygosity rate | Share of a sample's non-missing genotypes that are heterozygous |
+| Homozygous / heterozygous | Carrying two identical / two different alleles |
+| HPC cluster | Shared group of compute nodes managed by a job scheduler |
+| Identical by descent (IBD) | DNA inherited from a recent common ancestor |
+| Imputation | Predicting unmeasured genotypes from a haplotype reference panel |
+| Indel | Insertion or deletion of up to about 50 bp |
+| INFO / R² | Imputation quality score from 0 to 1 |
+| Inverse-variance weighting | Weighting each study by 1/SE² |
+| Job scheduler | Software that queues and places jobs on compute nodes (LSF, SLURM) |
+| Joint genotyping | Calling genotypes across many gVCFs together |
+| KING | Kinship estimator that stays accurate in mixed-ancestry samples |
+| Kinship coefficient | Probability that alleles drawn at random from two people at the same locus are IBD |
+| Knowledge graph | Property graph plus an organizing principle that gives labels and relationships shared meaning |
+| LD pruning | Thinning SNPs so no remaining pair exceeds an r² threshold |
+| LD score regression | Method that separates confounding (intercept) from polygenic signal (slope) |
+| Lead variant | The most significant variant of a signal |
+| Library preparation | Fragmenting DNA and adding adapters so it can be sequenced |
+| Liftover | Converting coordinates between genome builds with a chain file |
+| Link prediction | Predicting missing or future relationships from graph structure |
+| Linkage disequilibrium (LD) | Non-random association of alleles at nearby sites, measured by D′ or r² |
+| LMM / GLMM | (generalized) linear mixed model with a random genetic effect whose covariance is the GRM |
+| LOCO | Leave-one-chromosome-out fitting of the genetic random effect |
+| Locus | Region around a lead variant, with overlapping windows merged |
+| LOFTEE | VEP plugin that filters pLoF calls down to high-confidence ones |
+| Login node / compute node | The SSH entry point for editing and submitting / the machines where jobs run |
+| MAF | Minor allele frequency: frequency of the less common allele, at most 0.5 |
+| MAGMA | Gene and gene-set analysis of GWAS results |
+| Manhattan plot | −log₁₀(p) plotted against genomic position |
+| Mask | The rule that selects which variants enter a gene's set |
+| Meta-analysis | Combining summary statistics across studies |
+| Metabolizer phenotype | Standardized function category (ultrarapid, rapid, normal, intermediate, poor) derived from a diplotype |
+| METAL | Standard tool for GWAS meta-analysis |
+| microRNA (miRNA) | A ~22-nucleotide RNA that lowers protein output of its target mRNAs |
+| Minor allele count (MAC) | Number of copies of the minor allele in the sample |
+| Multiallelic site | A site with more than one ALT allele |
+| Negative binomial | Overdispersed count distribution (variance greater than mean), used for RNA-seq |
+| Node embedding | Vector encoding of a node's graph neighborhood (node2vec, FastRP) |
+| Null model | The model fitted without the variant being tested |
+| Odds ratio (OR) | E^β from logistic regression: change in odds per copy of the effect allele |
+| Ontology | Formal set of concepts and typed relationships between them (e.g., GO, EFO, MONDO, HPO) |
+| Outside call | A diplotype from a specialized external tool supplied to PharmCAT for genes it cannot call from a VCF |
+| p-value | Probability of data at least this extreme if the null hypothesis is true |
+| Paired-end reads | Reads taken from both ends of each DNA fragment |
+| Palindromic SNP | A/T or C/G SNP whose strand cannot be told from the allele letters |
+| Pharmacogenomics (PGx) | Study of how inherited variation changes drug absorption, activation, clearance or response |
+| PharmCAT | Open-source pipeline from VCF to pharmacogenomic genotype, phenotype and guideline report |
+| PharmVar | Pharmacogene Variation Consortium, the reference catalog of star-allele definitions |
+| Phasing | Assigning alleles to parental chromosomes; `/` vs `/` in VCF |
+| Phecode | Grouping of ICD codes into a phenotype for phenome-wide studies |
+| PheWAS | Phenome-wide association study: one variant tested against many phenotypes |
+| Phred score | Q = −10 log10(error probability); Q30 means a 0.1% error rate |
+| PI_HAT | Estimated proportion of the genome shared IBD (2 × kinship) |
+| Pleiotropy | One variant affecting several traits |
+| PLINK file sets | Bed/bim/fam (PLINK 1) and pgen/pvar/psam (PLINK 2) analysis-ready genotype files |
+| pLoF | Predicted loss-of-function variant: stop-gained, frameshift, or essential splice site |
+| Population stratification | Confounding of genotype–trait associations by ancestry |
+| Power | Probability of detecting a real effect, 1 − β |
+| Principal component (PC) | An axis of genome-wide variation, usually tracking ancestry |
+| Prodrug | A drug that must be activated by metabolism, e.g., clopidogrel by CYP2C19 |
+| Property graph | Graph model with labeled nodes, typed directed relationships, and key–value properties on both |
+| Pseudo-autosomal region (PAR) | Segments of X and Y inherited like autosomes |
+| pVCF | Joint-called multi-sample VCF |
+| qPCR | PCR with fluorescence measured each cycle to quantify the starting template |
+| QQ plot | Observed versus expected −log₁₀(p) |
+| Random-effects model | Lets true effects vary across studies (variance τ²) |
+| REF / ALT allele | The allele in the reference assembly / any other observed allele |
+| REGENIE | Whole-genome ridge-regression alternative to SAIGE |
+| rINT | Rank-based inverse normal transformation: maps a trait's ranks to normal quantiles |
+| rsID | The stable dbSNP identifier of a variant |
+| Saddlepoint approximation (SPA) | Accurate tail p-values for score tests under case–control imbalance |
+| SAIGE | Two-step GLMM tool for biobank-scale GWAS with SPA |
+| Score test | A test that needs only the null-model fit |
+| Scratch | Fast, non-backed-up temporary storage |
+| Sex check | Comparing recorded sex with sex inferred from X-chromosome homozygosity (F statistic) |
+| SKAT | Variance-component test that tolerates effects in opposite directions |
+| SKAT-O | Optimal combination of burden and SKAT |
+| SNV / SNP | Single-base variant / an SNV common enough to be called a polymorphism |
+| Standard error (SE) | The precision of an estimate; s/√n for a mean |
+| Star allele | A named haplotype of a pharmacogene (e.g., CYP2C19*2), defined by one or more variants |
+| Structural variant (SV) | A genomic rearrangement larger than 50 bp |
+| Summary statistics | Per-variant GWAS results table (effect, SE, p-value, alleles, frequency) |
+| Supernode | A node with very many relationships that makes traversals through it explode |
+| Tag SNP | A SNP that stands in for others in high LD with it |
+| Terra / DNAnexus | Cloud platforms for genomic analysis |
+| Ti/Tv ratio | Ratio of transition to transversion SNVs; a quick check on call quality |
+| Transcriptome | All RNA molecules in a cell or tissue at a given moment |
+| Traversal | A walk through a graph following relationships |
+| Trusted research environment (TRE) | Secure platform where you analyze data in place and only results leave |
+| Type I / type II error | False positive / false negative |
+| Variance ratio | SAIGE factor that rescales the cheap score variance to account for relatedness |
+| VCF | Standard text format for variant sites and per-sample genotypes |
+| VEP / ANNOVAR | Variant annotation tools |
+| WDL | Workflow Description Language for containerized, scatter-able pipelines (Cromwell, miniwdl) |
+| Whole-exome sequencing (WES) | Sequencing of captured protein-coding exons, about 1–2% of the genome |
+| Whole-genome sequencing (WGS) | Sequencing of nearly the entire genome without a capture step |
+| ΔΔCt method | Relative quantification against a reference gene and a control condition; fold change = 2^−ΔΔCt |
